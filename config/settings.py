@@ -86,8 +86,11 @@ SOLR_XSL_PATH = pathlib.Path(os.environ['SOLR_XSL_PATH'])
 TITLES_URL = os.environ['TITLES_URL']
 TRANSCRIPTION_PARSER_XSL_PATH = pathlib.Path(os.environ['TRANSCRIPTION_PARSER_XSL_PATH'])
 LEGIT_IPS = json.loads(os.environ['LEGIT_IPS_JSON'])
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
-RQ_QUEUE_NAME = os.environ.get('RQ_QUEUE_NAME', 'usep')
+SPOOL_ROOT_PATH = pathlib.Path(os.environ['SPOOL_ROOT_PATH'])
+SPOOL_MAX_ATTEMPTS = int(os.environ.get('SPOOL_MAX_ATTEMPTS', '3'))
+SPOOL_BATCH_SIZE = int(os.environ.get('SPOOL_BATCH_SIZE', '100'))
+SPOOL_COMPLETED_RETENTION_DAYS = int(os.environ.get('SPOOL_COMPLETED_RETENTION_DAYS', '30'))
+SPOOL_HEALTH_MAX_AGE_SECONDS = int(os.environ.get('SPOOL_HEALTH_MAX_AGE_SECONDS', '300'))
 README_URL = os.environ.get(
     'README_URL',
     'https://github.com/Brown-University-Library/usep_indexer_project',

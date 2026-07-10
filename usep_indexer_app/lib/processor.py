@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 
 from django.conf import settings
-from usep_indexer_app.lib.queue_support import enqueue_call
+from usep_indexer_app.lib import indexer
 
 
 log = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ def call_git_pull(git_clone_path: Path) -> None:
     """
     Runs git pull in the configured USEP data clone.
 
-    Called by: run_call_git_pull(), reindex.run_call_simple_git_pull()
+    Called by: process_incremental(), reindex.process_full_reindex()
     """
     subprocess.run(['git', 'pull'], cwd=git_clone_path, check=True, text=True)
     return
@@ -29,7 +29,7 @@ def copy_files(git_clone_path: Path, temp_data_path: Path, webserved_data_path: 
     """
     Mirrors resources and flattens the three inscription source directories.
 
-    Called by: run_copy_files(), reindex.run_simple_copy_files()
+    Called by: process_incremental(), reindex.process_full_reindex()
     """
     run_rsync(git_clone_path / 'resources', webserved_data_path / 'resources', delete=True)
     run_rsync(git_clone_path / 'xml_inscriptions' / 'bib_only', temp_data_path, delete=True)
@@ -58,7 +58,7 @@ def update_xinclude_references(inscriptions_path: Path) -> int:
     """
     Rewrites absolute resource includes in each flattened inscription XML file.
 
-    Called by: run_xinclude_updater(), reindex.run_simple_copy_files()
+    Called by: process_incremental(), reindex.process_full_reindex()
     """
     changed_file_count = 0
     for inscription_path in sorted(inscriptions_path.glob('*.xml')):
@@ -82,62 +82,19 @@ def rewrite_xinclude_text(xml_text: str) -> str:
     return updated_xml
 
 
-def run_call_git_pull(files_to_process: dict[str, object]) -> None:
+def process_incremental(files_to_update: list[str], files_to_remove: list[str]) -> None:
     """
-    Pulls the data clone and enqueues the copy stage.
+    Pulls and copies USEP data, then applies incremental Solr changes.
 
-    Called by: views.handle_github_push()
+    Called by: spool.process_valid_events()
     """
-    files_to_update = require_path_list(files_to_process, 'files_updated')
-    files_to_remove = require_path_list(files_to_process, 'files_removed')
     call_git_pull(settings.GIT_CLONED_DIR_PATH)
-    enqueue_call(
-        'usep_indexer_app.lib.processor.run_copy_files',
-        {'files_to_update': files_to_update, 'files_to_remove': files_to_remove},
-    )
-    return
-
-
-def run_copy_files(files_to_update: list[str], files_to_remove: list[str]) -> None:
-    """
-    Copies USEP data and enqueues the XInclude rewrite stage.
-
-    Called by: run_call_git_pull()
-    """
     copy_files(
         settings.GIT_CLONED_DIR_PATH,
         settings.TEMP_DATA_DIR_PATH,
         settings.WEBSERVED_DATA_DIR_PATH,
     )
-    enqueue_call(
-        'usep_indexer_app.lib.processor.run_xinclude_updater',
-        {'files_to_update': files_to_update, 'files_to_remove': files_to_remove},
-    )
-    return
-
-
-def run_xinclude_updater(files_to_update: list[str], files_to_remove: list[str]) -> None:
-    """
-    Rewrites copied XML and enqueues incremental Solr work.
-
-    Called by: run_copy_files()
-    """
     inscriptions_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions'
     update_xinclude_references(inscriptions_path)
-    enqueue_call(
-        'usep_indexer_app.lib.indexer.run_update_index',
-        {'files_updated': files_to_update, 'files_removed': files_to_remove},
-    )
+    indexer.update_index(files_to_update, files_to_remove)
     return
-
-
-def require_path_list(data: dict[str, object], key: str) -> list[str]:
-    """
-    Validates a queued path-list argument.
-
-    Called by: run_call_git_pull()
-    """
-    value = data.get(key)
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f'Expected {key} to contain a list of path strings.')
-    return value

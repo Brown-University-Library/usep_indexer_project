@@ -25,10 +25,10 @@ class ViewTests(SimpleTestCase):
         self.assertEqual(401, response.status_code)
         self.assertEqual('Basic realm="Login Required"', response['WWW-Authenticate'])
 
-    @patch('usep_indexer_app.views.enqueue_call')
-    def test_webhook_parses_all_commits_and_enqueues_pull(self, mock_enqueue_call) -> None:
+    @patch('usep_indexer_app.views.spool.write_event')
+    def test_webhook_parses_all_commits_and_writes_event(self, mock_write_event) -> None:
         """
-        Checks that added, modified, and removed paths are passed to RQ.
+        Checks that added, modified, and removed paths are durably queued.
         """
         payload = {
             'commits': [
@@ -48,56 +48,75 @@ class ViewTests(SimpleTestCase):
             '/',
             data=json.dumps(payload),
             content_type='application/json',
+            HTTP_X_GITHUB_DELIVERY='delivery-123',
             **self.auth_header,
         )
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(b'received', response.content)
-        function_path, kwargs = mock_enqueue_call.call_args.args
-        self.assertEqual('usep_indexer_app.lib.processor.run_call_git_pull', function_path)
-        files = kwargs['files_to_process']
+        mock_write_event.assert_called_once()
+        spool_root, event_type = mock_write_event.call_args.args
+        kwargs = mock_write_event.call_args.kwargs
+        self.assertEqual('/tmp/usep-indexer-spool-tests', str(spool_root))
+        self.assertEqual('incremental', event_type)
         self.assertEqual(
             [
                 'xml_inscriptions/bib_only/one.xml',
                 'xml_inscriptions/transcribed/two.xml',
                 'resources/titles.xml',
             ],
-            files['files_updated'],
+            kwargs['files_updated'],
         )
-        self.assertEqual(['xml_inscriptions/metadata_only/three.xml'], files['files_removed'])
+        self.assertEqual(['xml_inscriptions/metadata_only/three.xml'], kwargs['files_removed'])
+        self.assertEqual('delivery-123', kwargs['request_id'])
 
-    @patch('usep_indexer_app.views.enqueue_call')
-    def test_root_get_does_not_enqueue_without_a_body(self, mock_enqueue_call) -> None:
+    @patch('usep_indexer_app.views.spool.write_event')
+    def test_root_get_does_not_write_event_without_a_body(self, mock_write_event) -> None:
         """
         Checks the legacy root GET response without triggering work.
         """
         response = self.client.get('/', **self.auth_header)
         self.assertEqual(200, response.status_code)
         self.assertEqual(b'received', response.content)
-        mock_enqueue_call.assert_not_called()
+        mock_write_event.assert_not_called()
 
-    @patch('usep_indexer_app.views.enqueue_call')
-    def test_force_get_enqueues_empty_file_lists(self, mock_enqueue_call) -> None:
+    @patch('usep_indexer_app.views.spool.write_event')
+    def test_force_get_writes_empty_file_lists(self, mock_write_event) -> None:
         """
         Checks the legacy force endpoint's no-body behavior.
         """
         response = self.client.get('/force/', **self.auth_header)
         self.assertEqual(200, response.status_code)
-        files = mock_enqueue_call.call_args.args[1]['files_to_process']
-        self.assertEqual([], files['files_updated'])
-        self.assertEqual([], files['files_removed'])
+        self.assertEqual([], mock_write_event.call_args.kwargs['files_updated'])
+        self.assertEqual([], mock_write_event.call_args.kwargs['files_removed'])
 
-    @patch('usep_indexer_app.views.enqueue_call')
-    def test_reindex_all_enqueues_full_workflow(self, mock_enqueue_call) -> None:
+    @patch('usep_indexer_app.views.spool.write_event')
+    def test_reindex_all_writes_full_workflow_event(self, mock_write_event) -> None:
         """
         Checks that the admin reindex endpoint remains asynchronous.
         """
         response = self.client.get('/reindex_all/', **self.auth_header)
         self.assertEqual(200, response.status_code)
-        mock_enqueue_call.assert_called_once_with(
-            'usep_indexer_app.lib.reindex.run_call_simple_git_pull',
-            {},
-        )
+        mock_write_event.assert_called_once()
+        self.assertEqual('full_reindex', mock_write_event.call_args.args[1])
+
+    @patch('usep_indexer_app.views.spool.write_event', side_effect=OSError('disk full'))
+    def test_reindex_returns_service_error_when_event_write_fails(self, mock_write_event) -> None:
+        """
+        Checks that a failed full-reindex write is not acknowledged as accepted.
+        """
+        response = self.client.get('/reindex_all/', **self.auth_header)
+        self.assertEqual(503, response.status_code)
+        mock_write_event.assert_called_once()
+
+    @patch('usep_indexer_app.views.spool.write_event', side_effect=OSError('disk full'))
+    def test_webhook_returns_service_error_when_event_write_fails(self, mock_write_event) -> None:
+        """
+        Checks that a failed durable write is not acknowledged as accepted.
+        """
+        response = self.client.post('/', data='{}', content_type='application/json', **self.auth_header)
+        self.assertEqual(503, response.status_code)
+        mock_write_event.assert_called_once()
 
     @patch('usep_indexer_app.views.orphans.prep_orphan_list', return_value=['orphan-1'])
     def test_list_orphans_supports_json_and_signed_cookie_session(self, mock_prep) -> None:
@@ -129,14 +148,19 @@ class ViewTests(SimpleTestCase):
         response = self.client.get('/daemon_check/', REMOTE_ADDR='192.0.2.1')
         self.assertEqual(404, response.status_code)
 
-    @patch('usep_indexer_app.views.daemon.check_daemon', return_value='daemon_active')
-    def test_daemon_check_reports_worker_status(self, mock_check_daemon) -> None:
+    @patch(
+        'usep_indexer_app.views.daemon.check_daemon',
+        return_value={'result': 'daemon_active', 'pending_count': 2, 'processor_status': 'success'},
+    )
+    def test_daemon_check_reports_processor_status(self, mock_check_daemon) -> None:
         """
-        Checks the daemon endpoint's established JSON values.
+        Checks the daemon endpoint's established result and new backlog values.
         """
         response = self.client.get('/daemon_check/', REMOTE_ADDR='127.0.0.1')
         self.assertEqual(200, response.status_code)
         self.assertEqual('daemon_active', response.json()['result'])
+        self.assertEqual(2, response.json()['pending_count'])
+        self.assertEqual('success', response.json()['processor_status'])
         mock_check_daemon.assert_called_once_with()
 
     def test_info_response_retains_legacy_keys(self) -> None:

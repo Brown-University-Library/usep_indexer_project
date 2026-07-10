@@ -1,8 +1,7 @@
 import logging
 
 from django.conf import settings
-from rq import Worker
-from usep_indexer_app.lib.queue_support import get_queue
+from usep_indexer_app.lib import spool
 
 
 log = logging.getLogger(__name__)
@@ -20,17 +19,25 @@ def validate_request_source(request_ip: str) -> bool:
     return is_valid
 
 
-def check_daemon() -> str:
+def check_daemon() -> dict[str, object]:
     """
-    Checks RQ's worker registry for a worker on the configured queue.
+    Reports filesystem-queue processor freshness and backlog state.
 
     Called by: views.daemon_check()
     """
-    result = 'daemon_not_active'
     try:
-        queue = get_queue()
-        if Worker.all(queue=queue):
-            result = 'daemon_active'
+        result = spool.get_processor_health(settings.SPOOL_ROOT_PATH, settings.SPOOL_HEALTH_MAX_AGE_SECONDS)
     except Exception:
-        log.exception('Unable to inspect the RQ worker registry.')
+        log.exception('Unable to inspect filesystem-queue processor health.')
+        result = {
+            'result': 'daemon_not_active',
+            'processor_status': 'error',
+            'pending_count': 0,
+            'processing_count': 0,
+            'failed_count': 0,
+            'quarantine_count': 0,
+            'oldest_pending_age_seconds': None,
+            'last_started_at': None,
+            'last_finished_at': None,
+        }
     return result

@@ -76,8 +76,11 @@ SOLR_XSL_PATH = pathlib.Path('/tmp/USEp_to_Solr.xsl')
 TITLES_URL = 'http://example.org/usep_data/resources/titles.xml'
 TRANSCRIPTION_PARSER_XSL_PATH = pathlib.Path('/tmp/transcription_index_val.xsl')
 LEGIT_IPS = ['127.0.0.1']
-REDIS_URL = 'redis://127.0.0.1:6379/15'
-RQ_QUEUE_NAME = 'usep'
+SPOOL_ROOT_PATH = pathlib.Path('/tmp/usep-indexer-spool-tests')
+SPOOL_MAX_ATTEMPTS = 3
+SPOOL_BATCH_SIZE = 100
+SPOOL_COMPLETED_RETENTION_DAYS = 30
+SPOOL_HEALTH_MAX_AGE_SECONDS = 300
 README_URL = 'https://github.com/Brown-University-Library/usep_indexer_project'
 
 LOGGING = {

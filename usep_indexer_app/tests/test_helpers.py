@@ -50,24 +50,18 @@ class HelperTests(SimpleTestCase):
         self.assertTrue(indexer.should_index_path('xml_inscriptions/transcribed/one.xml'))
         self.assertFalse(indexer.should_index_path('resources/titles.xml'))
 
-    @patch('usep_indexer_app.lib.indexer.enqueue_call')
-    def test_incremental_indexer_queues_only_inscription_paths(self, mock_enqueue_call) -> None:
+    @patch('usep_indexer_app.lib.indexer.update_entry')
+    @patch('usep_indexer_app.lib.indexer.remove_entry')
+    def test_incremental_indexer_updates_only_inscription_paths(self, mock_remove_entry, mock_update_entry) -> None:
         """
-        Checks update and delete fan-out while ignoring resource changes.
+        Checks synchronous updates and deletes while ignoring resource changes.
         """
-        indexer.run_update_index(
+        indexer.update_index(
             ['resources/titles.xml', 'xml_inscriptions/transcribed/one.xml'],
             ['xml_inscriptions/bib_only/two.xml'],
         )
-        self.assertEqual(2, mock_enqueue_call.call_count)
-        self.assertEqual(
-            'usep_indexer_app.lib.indexer.run_remove_entry',
-            mock_enqueue_call.call_args_list[0].args[0],
-        )
-        self.assertEqual(
-            'usep_indexer_app.lib.indexer.run_update_entry',
-            mock_enqueue_call.call_args_list[1].args[0],
-        )
+        mock_remove_entry.assert_called_once_with('xml_inscriptions/bib_only/two.xml')
+        mock_update_entry.assert_called_once_with('xml_inscriptions/transcribed/one.xml')
 
     def test_build_solr_document_applies_configured_xslt(self) -> None:
         """
@@ -134,6 +128,42 @@ class HelperTests(SimpleTestCase):
         clone_path = pathlib.Path('/tmp/clone with spaces')
         processor.call_git_pull(clone_path)
         mock_run.assert_called_once_with(['git', 'pull'], cwd=clone_path, check=True, text=True)
+
+    @patch('usep_indexer_app.lib.processor.indexer.update_index')
+    @patch('usep_indexer_app.lib.processor.update_xinclude_references')
+    @patch('usep_indexer_app.lib.processor.copy_files')
+    @patch('usep_indexer_app.lib.processor.call_git_pull')
+    def test_incremental_processor_runs_synchronous_stages(
+        self,
+        mock_git_pull,
+        mock_copy_files,
+        mock_update_xinclude,
+        mock_update_index,
+    ) -> None:
+        """
+        Checks that incremental processing performs every stage without queue fan-out.
+        """
+        processor.process_incremental(['updated.xml'], ['removed.xml'])
+
+        mock_git_pull.assert_called_once_with(pathlib.Path('/tmp/usep-data-clone'))
+        mock_copy_files.assert_called_once_with(
+            pathlib.Path('/tmp/usep-data-clone'),
+            pathlib.Path('/tmp/usep-unified-inscriptions'),
+            pathlib.Path('/tmp/usep-webserved-data'),
+        )
+        mock_update_xinclude.assert_called_once_with(pathlib.Path('/tmp/usep-webserved-data/inscriptions'))
+        mock_update_index.assert_called_once_with(['updated.xml'], ['removed.xml'])
+
+    @patch('usep_indexer_app.lib.reindex.indexer.update_entry')
+    @patch('usep_indexer_app.lib.reindex.indexer.remove_entry_via_id')
+    def test_full_reindex_updates_are_synchronous(self, mock_remove_entry, mock_update_entry) -> None:
+        """
+        Checks that full-reindex removals and updates run directly in stable order.
+        """
+        reindex.update_all_index_entries(['/data/one.xml', '/data/two.xml'], ['old'])
+
+        mock_remove_entry.assert_called_once_with('old')
+        self.assertEqual([('/data/one.xml',), ('/data/two.xml',)], [call.args for call in mock_update_entry.call_args_list])
 
     def test_version_response_uses_git_head(self) -> None:
         """

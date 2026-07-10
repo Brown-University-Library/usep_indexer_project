@@ -8,9 +8,8 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
-from usep_indexer_app.lib import daemon, orphans, payloads, version_helper
+from usep_indexer_app.lib import daemon, orphans, payloads, spool, version_helper
 from usep_indexer_app.lib.auth import basic_auth_required
-from usep_indexer_app.lib.queue_support import enqueue_call
 
 
 log = logging.getLogger(__name__)
@@ -19,7 +18,7 @@ log = logging.getLogger(__name__)
 @require_GET
 def daemon_check(request: HttpRequest) -> JsonResponse:
     """
-    Reports whether an RQ worker is registered for the USEP queue.
+    Reports filesystem-queue processor freshness and backlog state.
 
     Called by: config.urls.urlpatterns
     """
@@ -27,11 +26,11 @@ def daemon_check(request: HttpRequest) -> JsonResponse:
     if not daemon.validate_request_source(request_ip):
         return JsonResponse({'detail': '404 / Not Found'}, status=404)
 
-    result = daemon.check_daemon()
+    health = daemon.check_daemon()
     context = {
         'datetime': str(datetime.datetime.now()),
         'request': 'daemon_check',
-        'result': result,
+        **health,
     }
     return JsonResponse(context, json_dumps_params={'indent': 2})
 
@@ -99,13 +98,18 @@ def delete_orphans(request: HttpRequest) -> HttpResponse:
 @basic_auth_required
 def reindex_all(request: HttpRequest) -> HttpResponse:
     """
-    Enqueues the complete pull, copy, and reindex workflow.
+    Saves a durable full pull, copy, and reindex request.
 
     Called by: config.urls.urlpatterns
     """
     del request
-    enqueue_call('usep_indexer_app.lib.reindex.run_call_simple_git_pull', {})
-    return HttpResponse('pull and reindex initiated.')
+    try:
+        spool.write_event(project_settings.SPOOL_ROOT_PATH, 'full_reindex')
+        response = HttpResponse('pull and reindex initiated.')
+    except OSError:
+        log.exception('Unable to durably save the full-reindex request.')
+        response = HttpResponse('unable to queue full reindex', status=503)
+    return response
 
 
 @csrf_exempt
@@ -113,7 +117,7 @@ def reindex_all(request: HttpRequest) -> HttpResponse:
 @basic_auth_required
 def handle_github_push(request: HttpRequest) -> HttpResponse:
     """
-    Accepts the legacy GitHub webhook contract and enqueues processing.
+    Accepts the legacy GitHub webhook contract and durably saves processing.
 
     Called by: config.urls.urlpatterns
     """
@@ -124,13 +128,21 @@ def handle_github_push(request: HttpRequest) -> HttpResponse:
         request.META.get('REMOTE_ADDR', 'unknown'),
         len(request.body),
     )
+    response = HttpResponse('received')
     if request.body or request.path.rstrip('/').endswith('/force'):
         files_to_process = payloads.prepare_files_to_process(request.body)
-        enqueue_call(
-            'usep_indexer_app.lib.processor.run_call_git_pull',
-            {'files_to_process': files_to_process},
-        )
-    return HttpResponse('received')
+        try:
+            spool.write_event(
+                project_settings.SPOOL_ROOT_PATH,
+                'incremental',
+                files_updated=files_to_process['files_updated'],
+                files_removed=files_to_process['files_removed'],
+                request_id=request.headers.get('X-GitHub-Delivery'),
+            )
+        except OSError:
+            log.exception('Unable to durably save the GitHub push event.')
+            response = HttpResponse('unable to queue event', status=503)
+    return response
 
 
 @require_GET

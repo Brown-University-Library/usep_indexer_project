@@ -1,6 +1,6 @@
 # USEP indexer project
 
-This Django 5.2 service replaces the legacy Flask `usep_gh_handler_app`. It accepts USEP GitHub push notifications, delegates filesystem and Solr work to the existing Redis/RQ architecture, and provides the legacy administrative endpoints.
+This Django 5.2 service replaces the legacy Flask `usep_gh_handler_app`. It accepts USEP GitHub push notifications, saves work to a durable filesystem-backed queue, and provides the legacy administrative endpoints. A cron-invoked Django management command processes queued work synchronously.
 
 The project intentionally has no database. It omits Django admin, auth, contenttypes, models, migrations, and database-backed sessions. The orphan confirmation flow uses a signed-cookie session.
 
@@ -16,10 +16,8 @@ The project intentionally has no database. It omits Django admin, auth, contentt
 - Python 3.12
 - `uv`
 - `git` and `rsync`
-- Redis 3.2.10 or newer
 - Access to the USEP data clone, web-served data directory, and Solr core
-
-RQ is deliberately pinned to 1.16.2. That release supports Python 3.12 and Redis servers 3.0 or newer. Current RQ releases require Redis 5 or newer and cannot be adopted until the production Redis server is upgraded.
+- A local POSIX filesystem supporting atomic rename and `flock` for the durable queue
 
 ## Setup
 
@@ -32,7 +30,7 @@ cd ./usep_indexer_project
 uv sync --upgrade
 ```
 
-Update `.env` with deployment-specific credentials, filesystem paths, Redis URL, and Solr settings. The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.
+Update `.env` with deployment-specific credentials, filesystem paths, spool path, and Solr settings. The spool is the durable filesystem-backed work queue and must not use temporary or ephemeral storage. The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.
 
 Run the web service:
 
@@ -40,13 +38,17 @@ Run the web service:
 uv run ./manage.py runserver
 ```
 
-Run the RQ worker in another terminal:
+Process one batch of queued events:
 
 ```bash
-uv run ./run_worker.py
+uv run ./manage.py process_spool
 ```
 
-For a one-time drain of the current queue, add `--burst`.
+The production processor is intended to run every other minute. The command takes a non-blocking lock, so an overlapping invocation exits safely:
+
+```cron
+*/2 * * * * cd /path/to/usep_indexer_project && uv run ./manage.py process_spool
+```
 
 ## Endpoints
 
@@ -57,7 +59,7 @@ For a one-time drain of the current queue, add `--burst`.
 | `/reindex_all/` | GET | Basic Auth | Enqueue full pull, copy, and reindex |
 | `/list_orphans/` | GET | Basic Auth | Compare filesystem and Solr IDs; add `?format=json` for JSON |
 | `/orphan_handler/` | GET | Basic Auth | Confirm or cancel orphan deletion |
-| `/daemon_check/` | GET | Source-IP allowlist | Report RQ worker availability |
+| `/daemon_check/` | GET | Source-IP allowlist | Report processor freshness and queue backlog |
 | `/info/` | GET | Public | Service metadata |
 | `/version/` | GET | Public | Git branch and commit metadata |
 | `/error_check/` | GET | Public | Raise in debug mode; return 404 otherwise |
@@ -66,10 +68,10 @@ GET support and the query-driven orphan deletion flow are retained for initial c
 
 ## Tests
 
-The test settings are database-free and do not require `.env`, Redis, Solr, or a USEP checkout.
+The test settings are database-free and do not require `.env`, Solr, or a USEP checkout.
 
 ```bash
 uv run ./run_tests.py -v
 ```
 
-See [REPORT_redis_rq_alternative.md](REPORT_redis_rq_alternative.md) for an assessment of replacing Redis/RQ with a durable filesystem spool and cron-driven processor.
+See [REPORT_redis_rq_alternative.md](REPORT_redis_rq_alternative.md) for the filesystem-queue architecture, operating assumptions, implementation plan, and future decisions.

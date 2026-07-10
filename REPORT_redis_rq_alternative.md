@@ -1,38 +1,61 @@
-# Feasibility report: replacing Redis/RQ with a filesystem spool and cron
+# Implementation plan: replace Redis/RQ with a filesystem-backed work queue
 
-Generated: 2026-07-09
+Updated: 2026-07-10
 
 ## Table of contents
 
-- [Executive assessment](#executive-assessment)
-- [Why this is a good candidate](#why-this-is-a-good-candidate)
-- [Recommended design](#recommended-design)
-- [Why not one append-only queue file](#why-not-one-append-only-queue-file)
-- [Reliability requirements](#reliability-requirements)
-- [Tradeoffs compared with Redis/RQ](#tradeoffs-compared-with-redisrq)
-- [Suggested migration path](#suggested-migration-path)
-- [Recommendation](#recommendation)
-- [Dependency compatibility note](#dependency-compatibility-note)
+- [Decision summary](#decision-summary)
+- [Terminology](#terminology)
+- [Confirmed deployment and operating assumptions](#confirmed-deployment-and-operating-assumptions)
+- [Target architecture](#target-architecture)
+- [Event schema](#event-schema)
+- [Event lifecycle](#event-lifecycle)
+- [Processing workflows](#processing-workflows)
+- [Failure recovery and retention](#failure-recovery-and-retention)
+- [Health and observability](#health-and-observability)
+- [Configuration and operations](#configuration-and-operations)
+- [Implementation work](#implementation-work)
+- [Verification and acceptance criteria](#verification-and-acceptance-criteria)
+- [Deployment handoff checklist](#deployment-handoff-checklist)
+- [Issues and decisions to consider in the future](#issues-and-decisions-to-consider-in-the-future)
+- [Tradeoffs](#tradeoffs)
 
-## Executive assessment
+## Decision summary
 
-Replacing Redis/RQ is feasible for this service. The workload is naturally batch-oriented, low-frequency, and dominated by global operations: one `git pull`, a complete rebuild of the flattened web-served tree, an XInclude rewrite pass, and then per-inscription Solr updates. A cron-driven processor can perform those steps without a database or a continuously running queue worker.
+Redis and RQ will be replaced directly rather than retained for a shadow period or emergency fallback. GitHub webhook events and full-reindex requests will be saved to a durable, filesystem-backed work queue. A Django management command, invoked by cron every other minute, will claim and process the queued work synchronously.
 
-The recommended filesystem design is a spool directory containing one immutable JSON file per accepted webhook—not multiple writers appending to one shared file. Per-event files make atomic writes, crash recovery, retries, inspection, and quarantine substantially simpler.
+This is a good fit because the workload is low-frequency and batch-oriented, while the shared git clone, staging tree, web-served tree, and Solr core already require serialized access. Closely spaced incremental events can be coalesced into one git pull, copy, XInclude rewrite, and set of Solr changes.
 
-Redis/RQ should remain for the initial Django deployment, as requested. The new business logic is separated from Django views and RQ orchestration so a later management command can call the same functions synchronously.
+The deployment is a single production host. Django and cron run under the same account and use the same local POSIX filesystem, which supports atomic rename and `flock`. Those confirmed constraints are part of the design, not incidental implementation details.
 
-## Why this is a good candidate
+## Terminology
 
-- GitHub pushes are expected to be infrequent relative to typical job-queue workloads.
-- Processing already needs serialization around the shared git clone, staging directory, web-served directory, and Solr core.
-- Copying always rebuilds the complete resource and inscription trees, so combining several closely spaced webhook events is safe before incremental indexing.
-- A delay up to the cron interval is likely acceptable because the current listener is already asynchronous.
-- The service does not need a database for application state.
+In this plan, **spool** means the durable, filesystem-backed work queue. It is not a temporary scratch area.
 
-## Recommended design
+- **Spool directory:** the directory tree containing queued event files and their lifecycle directories.
+- **Spool schema:** the expected JSON structure and validation rules for each event file.
+- **Spool writes:** saving new webhook or administrative events atomically into `pending/`.
+- **Spool processor:** the cron-invoked Django management command that claims and processes event files.
+- **Spool loss:** losing queued event files before they have been processed successfully.
+- **Event:** one JSON file representing an accepted incremental webhook/force request or a requested full reindex.
+- **Claim:** an atomic rename of an event from `pending/` to `processing/`, assigning it to the locked processor invocation.
 
-Use directories such as:
+## Confirmed deployment and operating assumptions
+
+- One production host runs both the Django service and the cron command.
+- Both processes use the same local filesystem and the same operating-system account.
+- Atomic rename is available when source and destination are inside the spool directory tree.
+- Advisory `flock` locking is available and reliable on that filesystem.
+- Cron invokes the processor every other minute. This intentionally provides a short coalescing window during bursts of updates.
+- Processing is serial. Per-inscription parallelism will not be recreated.
+- An event receives at most three processing attempts before it is moved to `failed/`.
+- Completed events are retained for 30 days.
+- Failed and quarantined events are retained until an operator resolves them.
+- These cadence, retry, and retention values are configuration defaults so they can be tuned after testing and production measurement.
+
+## Target architecture
+
+The configured spool directory has this layout:
 
 ```text
 spool/
@@ -41,84 +64,187 @@ spool/
     completed/
     failed/
     quarantine/
+    processor.lock
+    processor-status.json
 ```
 
-The listener would:
+One event per file is safer than a shared append-only JSONL file. It avoids coordination around partial lines and file rotation and makes individual events easy to inspect, replay, or quarantine.
 
-1. Parse and minimally validate the GitHub payload.
-2. Create a unique event document containing a schema version, received timestamp, request identifier, updated paths, removed paths, and optionally a hash of the raw payload.
-3. Write it to a temporary file in `pending/`, flush and `fsync` it, then atomically rename it to its final `.json` name.
-4. Return the same immediate HTTP acknowledgement used today.
+The request path is:
 
-The cron command would:
+1. The view parses and minimally validates request input.
+2. A library helper constructs the versioned event document.
+3. The helper writes a uniquely named temporary file in `pending/`, flushes and `fsync`s it, atomically renames it to its final `.json` name, and synchronizes the directory.
+4. Only after the durable write succeeds does the endpoint return its normal acknowledgement. A failed spool write returns a service error so GitHub or an operator can retry.
 
-1. Acquire a non-blocking operating-system lock so two cron invocations cannot process the shared checkout simultaneously.
-2. Atomically move a bounded batch of pending files to `processing/`.
-3. Validate each document against the current spool schema.
-4. Coalesce updated and removed paths across the batch, resolving a path's final state by the newest event.
-5. Run one git pull, one full copy, and one XInclude rewrite for the batch.
-6. Apply the combined incremental Solr updates and removals.
-7. Move successful event files to `completed/`, or move failed files back to `pending/` with attempt metadata and eventually to `failed/` or `quarantine/`.
-8. Emit structured counts and timing logs and enforce retention limits for completed events.
+The processing path is:
 
-An alternative is to perform a full reindex for every batch. That is easier to reason about but may create unnecessary Solr traffic, so incremental path coalescing is preferable unless operational measurements show that full reindexing is inexpensive.
+1. Cron invokes `uv run ./manage.py process_spool` every other minute.
+2. The command attempts a non-blocking exclusive `flock` on `processor.lock`. Lock contention exits cleanly without starting a second processor.
+3. The locked processor includes recoverable files already in `processing/`, then atomically claims a bounded batch from `pending/`.
+4. It validates each file against the spool schema. Malformed or unsupported files move to `quarantine/` without blocking valid events.
+5. It coalesces valid incremental paths in event order. The newest event determines whether each path is updated or removed.
+6. If the batch contains a full-reindex event, the batch uses the full-reindex workflow; otherwise it uses the coalesced incremental workflow.
+7. Successful files move to `completed/`. A failed batch is retried or moved to `failed/` according to its attempt count.
+8. The invocation updates processor status, logs structured counts and timings, and removes completed files older than the configured retention period.
 
-## Why not one append-only queue file
+## Event schema
 
-A shared JSONL file can work if every writer uses `flock`, appends exactly one newline-terminated record, flushes, and `fsync`s before releasing the lock. The reader then needs a safe checkpoint or atomic file rotation. It also needs recovery rules for a partial final line and careful coordination with writers during rotation.
+Schema version 1 contains:
 
-One-file-per-event avoids most of those edge cases and makes manual recovery obvious: an administrator can inspect, replay, move, or quarantine an individual event without editing a shared log.
+```json
+{
+  "schema_version": 1,
+  "event_id": "UUID",
+  "event_type": "incremental",
+  "received_at": "UTC ISO-8601 timestamp",
+  "request_id": "GitHub delivery ID or generated UUID",
+  "files_updated": ["xml_inscriptions/transcribed/example.xml"],
+  "files_removed": [],
+  "attempts": 0,
+  "last_attempt_at": null,
+  "last_error": null
+}
+```
 
-## Reliability requirements
+`event_type` is either `incremental` or `full_reindex`. Full-reindex events have empty path lists. The identity, type, received timestamp, request ID, and path lists are the immutable event payload. Retry bookkeeping fields may be updated through the same atomic file-replacement procedure.
 
-The filesystem spool must not be treated as a casual temporary directory. It needs:
+Validation rejects unsupported schema versions, unknown event types, invalid IDs or timestamps, non-list path fields, non-string paths, negative attempt counts, and invalid retry metadata. Invalid event files go to `quarantine/`; they do not consume retry attempts because they cannot safely enter a processing workflow.
 
-- A local filesystem whose rename operation is atomic within the spool.
-- Adequate permissions and disk monitoring.
-- A uniqueness strategy such as timestamp plus UUID.
-- A single-processor lock, preferably `flock` on a dedicated lock file.
-- A documented retry limit and poison-event quarantine behavior.
-- Idempotent processing. Re-running git pull, the copy, XInclude replacements, and Solr updates should converge on the same result.
-- Retention and cleanup policies for completed and failed events.
-- Alerting for oldest-pending age, repeated failures, malformed events, and disk usage.
-- Backup or explicit acceptance that GitHub webhook redelivery is the recovery source after total spool loss.
+## Event lifecycle
 
-## Tradeoffs compared with Redis/RQ
+```text
+request -> pending -> processing -> completed
+                         |             |
+                         |             +-> deleted after retention period
+                         |
+                         +-> pending (attempts remain below limit)
+                         +-> failed  (attempt limit reached)
+                         +-> quarantine (invalid schema)
+```
+
+Files left in `processing/` after a process crash are included in the next locked invocation. Because a crash may occur after some external side effects but before lifecycle moves finish, all processing operations must remain convergent when repeated.
+
+## Processing workflows
+
+For an incremental batch, the processor:
+
+1. Coalesces updated and removed paths, with each newer event replacing the earlier state for the same path.
+2. Runs one `git pull` in the configured USEP clone.
+3. Runs one full resource/inscription copy and one XInclude rewrite pass.
+4. Removes the coalesced deleted inscription IDs from Solr.
+5. Synchronously indexes each coalesced updated inscription.
+
+For a batch containing a full-reindex event, the processor:
+
+1. Runs one `git pull`, one full copy, and one XInclude rewrite pass.
+2. Builds the complete web-served inscription list.
+3. Queries Solr for IDs absent from that list and removes them.
+4. Synchronously indexes every inscription in stable order.
+
+The existing pure git, copy, rewrite, transform, and Solr helpers remain reusable. RQ-specific chaining and fan-out are replaced with explicit synchronous orchestration in library modules; Django views remain thin.
+
+## Failure recovery and retention
+
+- One failure of the shared workflow applies to every valid event in that batch because the events were coalesced into one unit of work.
+- Failed events are atomically rewritten with an incremented `attempts`, a UTC `last_attempt_at`, and a bounded error summary.
+- Events below the three-attempt limit return to `pending/`; events reaching the limit move to `failed/`.
+- Invalid JSON and invalid-schema documents move to `quarantine/` and are logged.
+- Existing files in `processing/` are replayed on the next invocation after a crash.
+- Completed-event cleanup uses file age and the 30-day default retention setting.
+- Failed and quarantined files are never automatically deleted.
+- Total spool loss remains an operational data-loss event. GitHub redelivery or manual/full reindex is the recovery source; backup requirements remain an operator decision.
+
+## Health and observability
+
+The processor maintains an atomically written `processor-status.json` containing invocation timestamps, status, counts, and an error summary when applicable. The existing source-IP-protected `/daemon_check/` endpoint retains its legacy top-level result values while deriving health from recent processor status rather than an RQ worker registry. It also reports backlog information such as pending count and oldest-pending age.
+
+Logs include claimed, quarantined, completed, retried, failed, and retention-cleanup counts. Operational monitoring should alert on stale processor status, oldest-pending age, failed/quarantined events, and spool disk usage.
+
+## Configuration and operations
+
+The Django settings and dotenv example define:
+
+- `SPOOL_ROOT_PATH`
+- `SPOOL_MAX_ATTEMPTS` with default `3`
+- `SPOOL_BATCH_SIZE` with a conservative default that can be tuned
+- `SPOOL_COMPLETED_RETENTION_DAYS` with default `30`
+- `SPOOL_HEALTH_MAX_AGE_SECONDS` allowing more than two cron intervals
+
+The production cron entry should run every other minute:
+
+```cron
+*/2 * * * * cd /path/to/usep_indexer_project && uv run ./manage.py process_spool
+```
+
+The non-blocking processor lock makes overlapping cron invocations safe. Redis settings, the worker runner, and the `redis` and `rq` dependencies are removed as part of the direct cutover.
+
+## Implementation work
+
+1. Add a filesystem-queue library module for directory setup, schema creation and validation, atomic writes, claims, coalescing, retries, quarantine, status, health, and retention.
+2. Add synchronous incremental and full-reindex orchestrators that reuse existing business-logic helpers.
+3. Add the `process_spool` Django management command and non-blocking lock behavior.
+4. Change webhook, force, and full-reindex views to create durable events instead of RQ jobs.
+5. Change the daemon-check helper to inspect processor status and backlog.
+6. Add spool configuration to normal and test settings and to the dotenv example.
+7. Remove Redis/RQ imports, queue helpers, worker runner, dependencies, and documentation.
+8. Add focused Django tests and update existing RQ-oriented tests to assert filesystem-queue behavior.
+9. Run the repository test runner and Ruff checks, then reconcile documentation with the implemented behavior.
+
+## Verification and acceptance criteria
+
+- Atomic event creation produces a complete schema-valid file only in `pending/` and leaves no temporary file after success.
+- A spool-write failure does not return a successful webhook or reindex acknowledgement.
+- Concurrent processor invocation cannot acquire the lock and exits without claiming work.
+- Multiple events coalesce with newest-event-wins semantics.
+- A full-reindex event selects the full workflow for its batch.
+- Malformed and unsupported event files move to `quarantine/` while valid files continue.
+- A workflow failure retries events and the third failure moves them to `failed/`.
+- Files left in `processing/` are replayed by a later invocation.
+- Successful events move to `completed/`, and expired completed files are removed.
+- Health output reflects fresh/stale processor status and includes pending backlog data.
+- No application import, setting, dependency, command, or documentation still requires Redis or RQ.
+- `uv run ./run_tests.py` passes.
+- Ruff formatting and lint checks pass for the changed Python files.
+
+## Deployment handoff checklist
+
+1. Provision `SPOOL_ROOT_PATH` on durable local storage with capacity monitoring and ownership that allows the Django and cron processes to create, rename, synchronize, and delete files.
+2. Add the spool settings to the production environment, retaining the defaults initially except for any deployment-specific batch or health thresholds.
+3. Drain or otherwise account for every job in the old RQ queue before switching the web code; the direct-replacement code does not read legacy Redis jobs.
+4. Deploy the locked dependencies and application code with `uv sync --locked`.
+5. Install the every-other-minute cron entry under the same account as Django and confirm that its working directory, settings, environment, and log destination are correct.
+6. Stop the RQ worker when the legacy queue is drained. Redis can remain available during deployment verification, but the new application has no Redis/RQ dependency or fallback path.
+7. Send a controlled webhook or use `/force/`, confirm that one event appears in `pending/`, allow cron to process it, and confirm its move to `completed/`.
+8. Check `/daemon_check/` after the first cron invocation and verify fresh processor status, expected backlog counts, and no failed or quarantined events.
+9. Trigger `/reindex_all/` if a final convergence pass is desired, then verify the Solr result and processor status before considering the cutover complete.
+
+## Issues and decisions to consider in the future
+
+- Tune the two-minute cadence, batch-size limit, three-attempt limit, 30-day retention, and health-age threshold using observed production traffic and duration.
+- Decide whether completed events need backup or whether their 30-day audit window is sufficient.
+- Decide whether the spool directory itself needs backup. Without it, spool loss requires GitHub redelivery or an operator-triggered full reindex.
+- Establish alert thresholds and the mechanism used to monitor stale status, oldest-pending age, failed/quarantined counts, and disk capacity.
+- Add operator commands for listing, inspecting, replaying, and explicitly discarding failed or quarantined events if direct file operations prove too error-prone.
+- Decide whether resource-only changes should trigger a full Solr reindex. The current incremental contract copies resource changes but indexes only changed inscription paths.
+- Revisit webhook authentication and validation, including GitHub signature verification, independently of the queue replacement.
+- Revisit legacy GET support and the query-driven orphan deletion flow in a later API revision.
+- Reconsider this architecture before moving to multiple web hosts, separate Unix accounts, shared/network storage, containers with ephemeral filesystems, or active-active processing.
+- Measure whether sequential full reindexing is operationally acceptable; if not, add deliberately bounded concurrency without weakening the global workflow lock.
+
+## Tradeoffs
 
 Advantages:
 
-- Removes the Redis service and the continuously running RQ worker.
-- Avoids the production constraint imposed by Redis 3.2.10.
-- Produces directly inspectable queue state.
-- Fits the serial, batch-oriented nature of the workflow.
-- Reduces Python package compatibility coupling.
+- Removes the Redis service, continuously running RQ worker, and the production Redis-version dependency constraint.
+- Produces inspectable queue state using ordinary files.
+- Fits the serialized, batch-oriented workflow and coalesces bursts naturally.
+- Keeps the service database-free and reduces Python dependency coupling.
 
 Costs:
 
-- Processing latency becomes the cron interval.
-- Retry, quarantine, monitoring, retention, and locking become application responsibilities.
-- Per-inscription parallelism is lost unless deliberately rebuilt; that is probably acceptable and may be safer for Solr.
-- Disk-full and permission failures can prevent the listener from durably accepting an event.
-- A filesystem spool is ordinarily single-host. Shared or active-active web deployments would need shared storage with verified locking semantics or a different durable queue.
-
-## Suggested migration path
-
-1. Run the Django/RQ port in production and gather event frequency, processing duration, failure rate, and queue-depth data.
-2. Add a `process_spool` Django management command that calls the existing helper functions directly.
-3. Add unit tests for atomic event creation, lock contention, coalescing, retry limits, and crash recovery.
-4. Exercise the spool processor in shadow mode using copied payloads without posting to production Solr.
-5. Switch the listener from RQ enqueueing to atomic spool writes while retaining RQ as an emergency fallback for one release.
-6. Add cron, monitoring, retention cleanup, and an operator replay command.
-7. Remove Redis/RQ only after successful failure-recovery testing.
-
-## Recommendation
-
-Proceed with Redis/RQ for this first migration. Treat a per-event filesystem spool plus a locked cron processor as a strong follow-up option. It is likely simpler operationally for this particular workload, but only after its durability, observability, and replay behavior are implemented explicitly.
-
-## Dependency compatibility note
-
-RQ 1.16.2 documents support for Redis servers 3.0 and newer and declares Python 3.12 support. Current RQ documentation requires Redis 5 or newer. The project therefore pins RQ to 1.16.2 while the server remains on Redis 3.2.10.
-
-- [RQ 1.16.2 README](https://github.com/rq/rq/blob/v1.16.2/README.md)
-- [RQ 1.16.2 package metadata](https://github.com/rq/rq/blob/v1.16.2/pyproject.toml)
-- [Current RQ documentation](https://python-rq.org/docs/)
+- Processing latency is governed by the cron interval.
+- Retry, quarantine, health, retention, locking, and disk monitoring become application responsibilities.
+- Disk-full or permission failures prevent durable acceptance and must surface as request failures.
+- Per-inscription parallelism is removed.
+- The design is intentionally single-host and relies on the confirmed local-filesystem guarantees.
