@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>USEP Solr orphans</title>
+    </head>
+    <body>
+        {% if data %}
+            <p>Comparing inscription IDs in “{{ inscriptions_dir_path }}” with Solr at “{{ solr_url }}” yielded these orphans:</p>
+            <ul>
+                {% for inscription_id in data %}<li>{{ inscription_id }}</li>{% endfor %}
+            </ul>
+            <p>Time taken: {{ time_taken }}</p>
+            <hr>
+            <p>Would you like to delete these orphans?</p>
+            <form action="{{ orphan_handler_url }}" method="get">
+                <button type="submit" value="Yes" name="action_button">Yes</button>
+                <button type="submit" value="No" name="action_button">No</button>
+            </form>
+        {% else %}
+            <p>No orphans to delete from comparing inscription IDs in “{{ inscriptions_dir_path }}” with Solr at “{{ solr_url }}”.</p>
+        {% endif %}
+    </body>
+</html>

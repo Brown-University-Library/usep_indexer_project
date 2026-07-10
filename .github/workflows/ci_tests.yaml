@@ -1,0 +1,89 @@
+name: CI tests
+
+on:
+  push:
+    branches: [ main ]
+
+  pull_request:
+    branches: [ main ]
+
+  ## enables manual run without a PR
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: continuous_integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.0"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --group ci_tests
+
+      - name: Run tests
+        run: uv run ./run_tests.py
+
+# =============================================================================
+# CI WORKFLOW DOCUMENTATION
+# -----------------------------------------------------------------------------
+# name: ci-tests-uv
+#   - The display name of this workflow in the GitHub Actions UI.
+#
+# on:
+#   push: [ main ]
+#     - Run the workflow on any push to the main branch.
+#   pull_request: [ main ]
+#     - Run the workflow for PRs targeting main. GitHub automatically creates
+#       a temporary merge commit for PR runs, so we do NOT perform our manual
+#       merge simulation in this case.
+#   workflow_dispatch:
+#     - Allows manual runs without a pull-request.
+#
+# concurrency:
+#   group: ci-${{ github.workflow }}-${{ github.ref }}
+#     - Defines the concurrency "group key". Any runs that share this exact 
+#       key are considered mutually exclusive.
+#   cancel-in-progress: true
+#     - Ensures only one run per workflow/ref combination; newer runs cancel
+#       any previous in-progress run to save CI resources.
+#
+# jobs.build:
+#   name: continuous_integration
+#   runs-on: ubuntu-latest
+#     - Single job that performs checkout, environment setup, dependency
+#       installation, and test execution on Ubuntu.
+#
+# steps:
+#   - Checkout code
+#     - "v4" is the version of the GitHub checkout action.
+#     - We rely on the default shallow checkout (fetch-depth: 1).
+#
+#   - Install uv
+#     - "v6" is the version of the GitHub setup-uv action.
+#     - Installs uv (version 0.8.0) and enables caching to speed up installs.
+#
+#   - Install dependencies
+#     - Uses 'uv sync --locked' to create a reproducible environment
+#       strictly from the lockfile.
+#     - Note: we used to have a "Setup Python" step. There are some
+#       recommendations to use this because GitHub provides a cached version
+#       which `uv sync...` will use. Based on testing, though, the speedup
+#       was minimal, not worth an extra step of complexity.
+#
+#   - Run tests
+#     - Runs the Django test suite via './run_tests.py' using uv:
+#       'uv run ./run_tests.py'. This repository's run_tests.py sets
+#       DJANGO_SETTINGS_MODULE=config.settings.unit_tests.
+# =============================================================================

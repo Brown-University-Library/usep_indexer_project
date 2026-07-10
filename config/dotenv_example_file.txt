@@ -1,0 +1,29 @@
+SECRET_KEY="replace_with_a_long_random_value"
+DEBUG_JSON="true"
+ADMINS_JSON='[["Example Admin", "admin@example.org"]]'
+ALLOWED_HOSTS_JSON='["127.0.0.1", "localhost"]'
+CSRF_TRUSTED_ORIGINS_JSON='[]'
+SESSION_COOKIE_SECURE_JSON="false"
+
+STATIC_URL="/static/"
+STATIC_ROOT="../static_root"
+SERVER_EMAIL="donotreply@example.org"
+EMAIL_HOST="localhost"
+EMAIL_PORT="1026"
+LOG_PATH="../logs/usep_indexer.log"
+LOG_LEVEL="DEBUG"
+CACHES_JSON='{"default": {"BACKEND": "django.core.cache.backends.filebased.FileBasedCache", "LOCATION": "../cache_dir", "TIMEOUT": 0}}'
+
+BASIC_AUTH_USERNAME="replace_me"
+BASIC_AUTH_PASSWORD="replace_me"
+GIT_CLONED_DIR_PATH="/path/to/usep_data_clone"
+TEMP_DATA_DIR_PATH="/path/to/temp_unified_inscriptions"
+WEBSERVED_DATA_DIR_PATH="/path/to/webserved/usep_data"
+SOLR_URL="http://127.0.0.1:8983/solr/us_epigraphy"
+SOLR_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/USEp_to_Solr.xsl"
+TITLES_URL="http://127.0.0.1/usep_data/resources/titles.xml"
+TRANSCRIPTION_PARSER_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/transcription_index_val.xsl"
+LEGIT_IPS_JSON='["127.0.0.1"]'
+REDIS_URL="redis://127.0.0.1:6379/0"
+RQ_QUEUE_NAME="usep"
+README_URL="https://github.com/Brown-University-Library/usep_indexer_project"

@@ -1,0 +1,22 @@
+[project]
+name = "usep_indexer_project"
+version = "0.1.0"
+description = "Django listener and Solr indexer for USEP data updates."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "Django~=5.2.0",
+    "httpx~=0.28.0",
+    "lxml~=6.0.0",
+    "python-dotenv~=1.1.0",
+    "redis~=5.0.0",
+    # RQ 1.16.2 supports Python 3.12 and Redis server >=3.0. Newer RQ lines
+    # require newer Redis servers, but production currently runs Redis 3.2.10.
+    "rq==1.16.2",
+]
+
+[dependency-groups]
+local = []
+staging = []
+prod = []
+ci_tests = []
