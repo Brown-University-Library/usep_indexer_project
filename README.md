@@ -1,5 +1,11 @@
 # USEP indexer project
 
+---
+
+UNDER-CONSTRUCTION -- not yet deployed
+
+---
+
 This Django 5.2 service replaces the legacy Flask `usep_gh_handler_app`. It accepts USEP GitHub push notifications, saves work to a durable filesystem-backed queue, and provides the legacy administrative endpoints. A cron-invoked Django management command processes queued work synchronously.
 
 The project intentionally has no database. It omits Django admin, auth, contenttypes, models, migrations, and database-backed sessions. The orphan confirmation flow uses a signed-cookie session.
@@ -21,11 +27,11 @@ The project intentionally has no database. It omits Django admin, auth, contentt
 
 ## Setup
 
-From `usep_indexer_project_stuff`:
-
 ```bash
+cd /path/to/usep_indexer_project_stuff/
 cp ./usep_indexer_project/config/dotenv_example_file.txt ./.env
 mkdir -p ./logs ./cache_dir
+git clone git@github.com:Brown-University-Library/usep_indexer_project.git
 cd ./usep_indexer_project
 uv sync --upgrade
 ```
