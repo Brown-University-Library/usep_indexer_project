@@ -19,8 +19,7 @@ The project intentionally has no database. It omits Django admin, auth, contentt
 
 ## Requirements
 
-- Python 3.12
-- `uv`
+- `uv` -- [installation](https://docs.astral.sh/uv/getting-started/installation/)
 - `git` and `rsync`
 - Access to the USEP data clone, web-served data directory, and Solr core
 - A local POSIX filesystem supporting atomic rename and `flock` for the durable queue
