@@ -9,7 +9,7 @@ behavior without reading deployment settings or invoking the queue processor,
 Git, rsync, or Solr.
 
 Usage:
-    uv run ./check_web_listener.py
+    uv run ./check_web_listener.py [--payload PATH]
 """
 
 import argparse
@@ -39,8 +39,6 @@ DEFAULT_PAYLOAD_PATH = (
 LOCAL_HOST = '127.0.0.1'
 LOCAL_USERNAME = 'local-webhook-check'
 LOCAL_PASSWORD = 'local-webhook-password'
-EXPECTED_UPDATED_FILES = ['xml_inscriptions/transcribed/Auct.CA.Oak.priv.L.22.12.06.xml']
-EXPECTED_REMOVED_FILES: list[str] = []
 HTTP_TIMEOUT_SECONDS = 5.0
 
 
@@ -67,17 +65,28 @@ def configure_logging() -> None:
     return
 
 
-def parse_arguments() -> None:
+def parse_arguments() -> pathlib.Path:
     """
-    Parses command-line help for the fixed-fixture check.
+    Parses and resolves the payload path from the project-root working directory.
 
     Called by: main()
     """
     parser = argparse.ArgumentParser(
         description='Start a local HTTP server and verify the real GitHub webhook listener.',
     )
-    parser.parse_args()
-    return
+    parser.add_argument(
+        '--payload',
+        type=pathlib.Path,
+        default=DEFAULT_PAYLOAD_PATH,
+        metavar='PATH',
+        help='JSON payload file; relative paths are resolved from the project-root working directory.',
+    )
+    arguments = parser.parse_args()
+    payload_path = arguments.payload.expanduser()
+    if not payload_path.is_absolute():
+        payload_path = pathlib.Path.cwd() / payload_path
+    payload_path = payload_path.resolve()
+    return payload_path
 
 
 def start_local_server() -> tuple[WSGIServer, threading.Thread, str]:
@@ -150,9 +159,7 @@ def check_accepted_request(
 
     Called by: run_http_check()
     """
-    log.debug(
-        f'request_action, ``send GitHub push``; listener_url, ``{listener_url}``; delivery_id, ``{delivery_id}``'
-    )
+    log.debug(f'request_action, ``send GitHub push``; listener_url, ``{listener_url}``; delivery_id, ``{delivery_id}``')
     response = client.post(
         listener_url,
         content=payload_body,
@@ -171,10 +178,6 @@ def check_accepted_request(
         raise RuntimeError(f'Expected an incremental event; found {event.event_type!r}.')
     if event.request_id != delivery_id:
         raise RuntimeError(f'Expected request ID {delivery_id!r}; found {event.request_id!r}.')
-    if event.files_updated != EXPECTED_UPDATED_FILES:
-        raise RuntimeError(f'Unexpected updated files: {event.files_updated!r}.')
-    if event.files_removed != EXPECTED_REMOVED_FILES:
-        raise RuntimeError(f'Unexpected removed files: {event.files_removed!r}.')
     log.info(
         f'queued event validated; delivery_id, ``{delivery_id}``; event_path, ``{pending_events[0]}``; '
         f'files_updated, ``{event.files_updated}``; files_removed, ``{event.files_removed}``'
@@ -182,7 +185,7 @@ def check_accepted_request(
     return pending_events[0]
 
 
-def run_http_check() -> pathlib.Path:
+def run_http_check(payload_path: pathlib.Path) -> pathlib.Path:
     """
     Runs rejected and accepted requests against an isolated local listener.
 
@@ -191,12 +194,10 @@ def run_http_check() -> pathlib.Path:
     django.setup()
     configure_logging()
     log.info('local HTTP listener check started')
-    payload_body = DEFAULT_PAYLOAD_PATH.read_bytes()
+    log.debug(f'payload_path, ``{payload_path}``')
+    payload_body = payload_path.read_bytes()
     delivery_id = f'local-check-{uuid.uuid4()}'
-    log.debug(
-        f'payload_path, ``{DEFAULT_PAYLOAD_PATH}``; payload_bytes, ``{len(payload_body)}``; '
-        f'delivery_id, ``{delivery_id}``'
-    )
+    log.debug(f'payload_bytes, ``{len(payload_body)}``; delivery_id, ``{delivery_id}``')
     headers = {
         'Content-Type': 'application/json',
         'User-Agent': 'GitHub-Hookshot/local-web-listener-check',
@@ -240,8 +241,8 @@ def main() -> None:
 
     Called by: dundermain
     """
-    parse_arguments()
-    checked_event_path = run_http_check()
+    payload_path = parse_arguments()
+    checked_event_path = run_http_check(payload_path)
     log.info(f'local HTTP listener check passed; checked_event_path, ``{checked_event_path}``')
     return
 
