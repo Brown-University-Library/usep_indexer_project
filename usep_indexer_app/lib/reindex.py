@@ -1,3 +1,10 @@
+"""
+Orchestrates a complete rebuild of the USEP Solr index.
+
+It composes the shared source-preparation and per-inscription indexing operations, then reconciles
+Solr with the complete filesystem corpus by removing stale document IDs.
+"""
+
 from pathlib import Path
 
 from django.conf import settings

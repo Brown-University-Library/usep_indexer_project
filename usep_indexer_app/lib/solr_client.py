@@ -1,3 +1,10 @@
+"""
+Provides the project's focused HTTP boundary to the USEP Solr core.
+
+Common select, update, commit, and deletion operations share timeout and error-handling behavior here
+so the indexing modules can work in domain terms.
+"""
+
 import httpx
 
 

@@ -1,3 +1,11 @@
+"""
+Synchronizes USEP source data and prepares it for indexing.
+
+This module groups the external Git and rsync steps with flattening the inscription sources,
+normalizing their XInclude references, and dispatching incremental index changes. Full reindexing
+reuses the same preparation operations.
+"""
+
 import logging
 import subprocess
 from pathlib import Path

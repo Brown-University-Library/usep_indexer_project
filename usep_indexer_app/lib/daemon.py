@@ -1,3 +1,10 @@
+"""
+Supports the restricted endpoint that reports filesystem-queue processor health.
+
+The request-source check and response-ready health lookup live here to keep daemon-monitoring policy
+out of the Django view layer.
+"""
+
 import logging
 
 from django.conf import settings

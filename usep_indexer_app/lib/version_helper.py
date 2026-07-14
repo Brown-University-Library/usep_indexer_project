@@ -1,3 +1,10 @@
+"""
+Supplies repository and request metadata for the public version endpoint.
+
+Git branch and commit discovery, short-lived caching, and response-context assembly are grouped here
+so the view only needs to format the endpoint response.
+"""
+
 import datetime
 import hashlib
 import logging

@@ -1,3 +1,10 @@
+"""
+Converts GitHub push payloads into the file-change data accepted by the durable queue.
+
+The parser collects changes across every commit while preserving the legacy behavior of producing
+empty change lists when a payload is empty or malformed.
+"""
+
 import datetime
 import json
 import logging

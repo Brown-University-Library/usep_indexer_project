@@ -1,3 +1,10 @@
+"""
+Finds and manages Solr inscriptions that no longer exist in the web-served data.
+
+Filesystem/Solr comparison, response-context preparation, and best-effort deletion are grouped here
+to support both the orphan administration flow and full reindexing.
+"""
+
 import datetime
 import logging
 from pathlib import Path

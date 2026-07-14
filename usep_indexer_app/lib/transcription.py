@@ -1,3 +1,10 @@
+"""
+Builds the searchable transcription field for an indexed inscription.
+
+TEI edition elements are extracted and normalized together here before an XSLT transformation turns
+them into the text sent through Solr's atomic-update interface.
+"""
+
 import re
 from pathlib import Path
 

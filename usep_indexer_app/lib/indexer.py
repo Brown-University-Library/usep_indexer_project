@@ -1,3 +1,10 @@
+"""
+Coordinates inscription-level changes to the USEP Solr index.
+
+It transforms web-served TEI XML into Solr documents, applies incremental additions and removals,
+and delegates the supplementary bibliography and transcription fields to their specialized modules.
+"""
+
 import logging
 from pathlib import Path
 

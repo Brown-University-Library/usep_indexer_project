@@ -1,3 +1,10 @@
+"""
+Provides the legacy HTTP Basic Auth boundary for protected Django views.
+
+The decorator, header parsing, and timing-safe credential comparison live together so endpoint views
+can apply one consistent authentication contract.
+"""
+
 import base64
 import binascii
 import logging

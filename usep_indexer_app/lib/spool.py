@@ -1,3 +1,11 @@
+"""
+Implements the durable filesystem-backed queue between web requests and indexing work.
+
+This module owns the event schema, atomic writes and lifecycle transitions, batch coalescing, retry
+handling, validation and isolation of malformed event-data, non-overlapping processing, retention
+cleanup, and processor-health data.
+"""
+
 import datetime
 import fcntl
 import json

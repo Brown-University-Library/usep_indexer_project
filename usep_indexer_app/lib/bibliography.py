@@ -1,3 +1,10 @@
+"""
+Enriches indexed inscriptions with their inherited bibliography relationships.
+
+This module bridges the TEI hierarchy in ``titles.xml`` and Solr's atomic-update interface so an
+inscription's direct bibliography references also expose their ancestor references.
+"""
+
 import httpx
 from lxml import etree
 from usep_indexer_app.lib import solr_client
