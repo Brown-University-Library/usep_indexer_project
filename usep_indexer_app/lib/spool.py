@@ -14,6 +14,9 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from django.conf import settings
 
 from usep_indexer_app.lib import processor, reindex
 
@@ -130,6 +133,18 @@ def build_event_document(
     return document
 
 
+def format_local_filename_timestamp(received_at: str) -> str:
+    """
+    Formats an event's UTC receipt time as a local 24-hour filename timestamp.
+
+    Called by: write_event()
+    """
+    received_at_datetime = datetime.datetime.fromisoformat(received_at)
+    local_received_at = received_at_datetime.astimezone(ZoneInfo(settings.TIME_ZONE))
+    filename_timestamp = local_received_at.strftime('%Y%m%dT%H%M%S.%f%z')
+    return filename_timestamp
+
+
 def write_event(
     spool_root: Path,
     event_type: str,
@@ -150,12 +165,11 @@ def write_event(
     document = build_event_document(event_type, files_updated, files_removed, request_id)
     event_id = str(document['event_id'])
     received_at = str(document['received_at'])
-    filename_timestamp = received_at.replace('-', '').replace(':', '').replace('+00:00', 'Z')
+    filename_timestamp = format_local_filename_timestamp(received_at)
     event_path = spool_root / 'pending' / f'{filename_timestamp}_{event_id}.json'
     write_json_atomic(document, event_path)
     log.info(
-        f'event saved; event_type, ``{event_type}``; request_id, ``{document["request_id"]}``; '
-        f'event_path, ``{event_path}``'
+        f'event saved; event_type, ``{event_type}``; request_id, ``{document["request_id"]}``; event_path, ``{event_path}``'
     )
     return event_path
 

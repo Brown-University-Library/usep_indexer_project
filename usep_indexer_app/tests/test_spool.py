@@ -40,6 +40,23 @@ class SpoolTests(SimpleTestCase):
         self.assertIn('event saved; event_type, ``incremental``', joined_logs)
         self.assertIn('request_id, ``delivery-1``', joined_logs)
 
+    @override_settings(TIME_ZONE='America/New_York')
+    @patch(
+        'usep_indexer_app.lib.spool.utc_now',
+        return_value=datetime.datetime(2026, 7, 14, 23, 33, 30, 123456, tzinfo=datetime.UTC),
+    )
+    def test_event_filename_uses_local_24_hour_timestamp(self, mock_utc_now) -> None:
+        """
+        Checks that event filenames show local 24-hour time with its UTC offset.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            event_path = spool.write_event(Path(temporary_directory), 'incremental')
+            event = spool.load_event(event_path)
+
+        self.assertTrue(event_path.name.startswith('20260714T193330.123456-0400_'))
+        self.assertEqual('2026-07-14T23:33:30.123456+00:00', event.received_at)
+        mock_utc_now.assert_called_once_with()
+
     @patch('usep_indexer_app.lib.spool.os.replace', side_effect=OSError('disk full'))
     def test_failed_atomic_write_removes_temporary_file(self, mock_replace) -> None:
         """

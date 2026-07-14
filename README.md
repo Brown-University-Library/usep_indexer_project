@@ -82,9 +82,10 @@ Run the black-box listener check from the project root:
 ```bash
 uv run ./check_web_listener.py
 uv run ./check_web_listener.py --payload path/to/github-payload.json
+uv run ./check_web_listener.py --payload path/to/github-payload.json --use-real-directory
 ```
 
-The script starts a real WSGI HTTP server on an available loopback port, sends rejected and accepted Basic Auth requests, and confirms that a durable event is written to an isolated temporary spool. It uses the sanitized GitHub payload fixture by default. Pass `--payload` to send another JSON payload; relative paths are resolved from the project-root working directory and logged as absolute paths. The script uses the test settings, does not read `.env`, and does not run the spool processor, Git, rsync, or Solr.
+The script starts a real WSGI HTTP server on an available loopback port, sends rejected and accepted Basic Auth requests, and confirms that a durable event is written. It uses the sanitized GitHub payload fixture and an isolated temporary spool by default. Pass `--payload` to send another JSON payload; relative paths are resolved from the project-root working directory and logged as absolute paths. Pass `--use-real-directory` to read only `SPOOL_ROOT_PATH` from the outer `.env` and leave the locally timestamped event in that spool's `pending/` directory for subsequent processing. The remaining test settings and local credentials stay in effect. The script does not run the spool processor, Git, rsync, or Solr.
 
 ## Tests
 
