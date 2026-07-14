@@ -1,12 +1,23 @@
 import datetime
 import json
 import logging
+from typing import TypedDict
 
 
 log = logging.getLogger(__name__)
 
 
-def prepare_files_to_process(request_body: bytes) -> dict[str, object]:
+class FilesToProcess(TypedDict):
+    """
+    Describes parsed webhook data so static type checkers preserve each value's type.
+    """
+
+    files_updated: list[str]
+    files_removed: list[str]
+    timestamp: str
+
+
+def prepare_files_to_process(request_body: bytes) -> FilesToProcess:
     """
     Extracts added, modified, and removed paths from a GitHub push payload.
 
@@ -14,7 +25,7 @@ def prepare_files_to_process(request_body: bytes) -> dict[str, object]:
 
     Called by: views.handle_github_push()
     """
-    files_to_process: dict[str, object] = {
+    files_to_process: FilesToProcess = {
         'files_updated': [],
         'files_removed': [],
         'timestamp': str(datetime.datetime.now()),
