@@ -10,11 +10,15 @@ This Django 5.2 service replaces the legacy Flask `usep_gh_handler_app`. It acce
 
 The project intentionally has no database. It omits Django admin, auth, contenttypes, models, migrations, and database-backed sessions. The orphan confirmation flow uses a signed-cookie session.
 
+_(Terms: the term `spool`, used below and in the project, refers to the filesystem-backed work queue where accepted requests are stored as event files until the processor handles them.)_
+
+
 ## Table of contents
 
 - [Requirements](#requirements)
 - [Setup](#setup)
 - [Endpoints](#endpoints)
+- [Local HTTP listener check](#local-http-listener-check)
 - [Tests](#tests)
 
 ## Requirements
@@ -35,7 +39,7 @@ cd ./usep_indexer_project
 uv sync --upgrade
 ```
 
-Update `.env` with deployment-specific credentials, filesystem paths, spool path, and Solr settings. The spool is the durable filesystem-backed work queue and must not use temporary or ephemeral storage. The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.
+Update `.env` with deployment-specific credentials, filesystem paths, spool path, and Solr settings. The spool must not use temporary or ephemeral storage. The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.
 
 Run the web service:
 
@@ -70,6 +74,16 @@ The production processor is intended to run every other minute. The command take
 | `/error_check/` | GET | Public | Raise in debug mode; return 404 otherwise |
 
 GET support and the query-driven orphan deletion flow are retained for initial compatibility. They should be tightened in a later API revision.
+
+## Local HTTP listener check
+
+Run the black-box listener check from the project root:
+
+```bash
+uv run ./check_web_listener.py
+```
+
+The script starts a real WSGI HTTP server on an available loopback port, sends rejected and accepted Basic Auth requests with the sanitized GitHub payload fixture, and validates the durable event written to an isolated temporary spool. It uses the test settings, does not read `.env`, and does not run the spool processor, Git, rsync, or Solr.
 
 ## Tests
 

@@ -1,0 +1,75 @@
+{
+  "ref": "refs/heads/master",
+  "before": "d34663bb2b772e7291851d08669a6565ebcc01c0",
+  "after": "f49e7f31b00136d801cc4eaf1fee51d9921d1169",
+  "repository": {
+    "id": 19704273,
+    "name": "usep-data",
+    "full_name": "Brown-University-Library/usep-data",
+    "private": false,
+    "html_url": "https://github.com/Brown-University-Library/usep-data",
+    "default_branch": "master"
+  },
+  "pusher": {
+    "name": "fixture-user",
+    "email": "fixture@example.org"
+  },
+  "sender": {
+    "login": "fixture-user",
+    "id": 0,
+    "type": "User"
+  },
+  "created": false,
+  "deleted": false,
+  "forced": false,
+  "base_ref": null,
+  "compare": "https://github.com/Brown-University-Library/usep-data/compare/d34663bb2b77...f49e7f31b001",
+  "head_commit": {
+    "id": "f49e7f31b00136d801cc4eaf1fee51d9921d1169",
+    "tree_id": "0e472a5fd62063fa81356f0708831ce6e8e2d998",
+    "distinct": true,
+    "message": "test commit to check indexing.",
+    "timestamp": "2026-07-11T09:43:25-04:00",
+    "url": "https://github.com/Brown-University-Library/usep-data/commit/f49e7f31b00136d801cc4eaf1fee51d9921d1169",
+    "author": {
+      "name": "Fixture User",
+      "email": "fixture@example.org",
+      "username": "fixture-user"
+    },
+    "committer": {
+      "name": "GitHub",
+      "email": "noreply@github.com",
+      "username": "web-flow"
+    },
+    "added": [],
+    "removed": [],
+    "modified": [
+      "xml_inscriptions/transcribed/Auct.CA.Oak.priv.L.22.12.06.xml"
+    ]
+  },
+  "commits": [
+    {
+      "id": "f49e7f31b00136d801cc4eaf1fee51d9921d1169",
+      "tree_id": "0e472a5fd62063fa81356f0708831ce6e8e2d998",
+      "distinct": true,
+      "message": "test commit to check indexing.",
+      "timestamp": "2026-07-11T09:43:25-04:00",
+      "url": "https://github.com/Brown-University-Library/usep-data/commit/f49e7f31b00136d801cc4eaf1fee51d9921d1169",
+      "author": {
+        "name": "Fixture User",
+        "email": "fixture@example.org",
+        "username": "fixture-user"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "username": "web-flow"
+      },
+      "added": [],
+      "removed": [],
+      "modified": [
+        "xml_inscriptions/transcribed/Auct.CA.Oak.priv.L.22.12.06.xml"
+      ]
+    }
+  ]
+}
