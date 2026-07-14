@@ -21,9 +21,12 @@ class ViewTests(SimpleTestCase):
         """
         Checks that the webhook endpoint retains HTTP Basic Auth.
         """
-        response = self.client.get('/')
+        with self.assertLogs('usep_indexer_app.lib.auth', level='INFO') as captured_logs:
+            response = self.client.get('/')
+
         self.assertEqual(401, response.status_code)
         self.assertEqual('Basic realm="Login Required"', response['WWW-Authenticate'])
+        self.assertIn('authorization_result, ``rejected``', captured_logs.output[0])
 
     @patch('usep_indexer_app.views.spool.write_event')
     def test_webhook_parses_all_commits_and_writes_event(self, mock_write_event) -> None:
@@ -44,16 +47,20 @@ class ViewTests(SimpleTestCase):
                 },
             ],
         }
-        response = self.client.post(
-            '/',
-            data=json.dumps(payload),
-            content_type='application/json',
-            HTTP_X_GITHUB_DELIVERY='delivery-123',
-            **self.auth_header,
-        )
+        with self.assertLogs('usep_indexer_app.views', level='DEBUG') as captured_logs:
+            response = self.client.post(
+                '/',
+                data=json.dumps(payload),
+                content_type='application/json',
+                HTTP_X_GITHUB_DELIVERY='delivery-123',
+                **self.auth_header,
+            )
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(b'received', response.content)
+        joined_logs = '\n'.join(captured_logs.output)
+        self.assertIn('github request received; request_id, ``delivery-123``', joined_logs)
+        self.assertIn("files_removed, ``['xml_inscriptions/metadata_only/three.xml']``", joined_logs)
         mock_write_event.assert_called_once()
         spool_root, event_type = mock_write_event.call_args.args
         kwargs = mock_write_event.call_args.kwargs

@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 import pathlib
 import tempfile
@@ -29,6 +30,9 @@ from django.test import override_settings
 
 from usep_indexer_app.lib import spool
 
+
+log = logging.getLogger(__name__)
+
 DEFAULT_PAYLOAD_PATH = (
     pathlib.Path(__file__).parent / 'usep_indexer_app' / 'tests' / 'fixtures' / 'github_push_2026_07_11.json'
 )
@@ -38,6 +42,29 @@ LOCAL_PASSWORD = 'local-webhook-password'
 EXPECTED_UPDATED_FILES = ['xml_inscriptions/transcribed/Auct.CA.Oak.priv.L.22.12.06.xml']
 EXPECTED_REMOVED_FILES: list[str] = []
 HTTP_TIMEOUT_SECONDS = 5.0
+
+
+def configure_logging() -> None:
+    """
+    Displays development and server-flow messages for the local check.
+
+    Called by: run_http_check()
+    """
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(
+        logging.Formatter(
+            '[%(asctime)s] %(levelname)s [%(module)s-%(funcName)s()::%(lineno)d] %(message)s',
+            datefmt='%d/%b/%Y %H:%M:%S',
+        )
+    )
+    for logger_name in (__name__, 'usep_indexer_app'):
+        configured_logger = logging.getLogger(logger_name)
+        configured_logger.handlers.clear()
+        configured_logger.addHandler(console_handler)
+        configured_logger.setLevel(logging.DEBUG)
+        configured_logger.propagate = False
+    return
 
 
 def parse_arguments() -> None:
@@ -66,6 +93,7 @@ def start_local_server() -> tuple[WSGIServer, threading.Thread, str]:
     server_thread.start()
     port = server.server_address[1]
     listener_url = f'http://{LOCAL_HOST}:{port}/'
+    log.info(f'local listener started; listener_url, ``{listener_url}``')
     return server, server_thread, listener_url
 
 
@@ -77,6 +105,7 @@ def find_pending_events(spool_root: pathlib.Path) -> list[pathlib.Path]:
     """
     pending_directory = spool_root / 'pending'
     pending_events = sorted(pending_directory.glob('*.json')) if pending_directory.is_dir() else []
+    log.debug(f'pending_event_count, ``{len(pending_events)}``; pending_directory, ``{pending_directory}``')
     return pending_events
 
 
@@ -92,6 +121,7 @@ def check_rejected_request(
 
     Called by: run_http_check()
     """
+    log.debug(f'request_action, ``send with incorrect credentials``; listener_url, ``{listener_url}``')
     response = client.post(
         listener_url,
         content=payload_body,
@@ -103,6 +133,7 @@ def check_rejected_request(
         raise RuntimeError(f'Incorrect Basic Auth returned HTTP {response.status_code}, not 401.')
     if pending_events:
         raise RuntimeError('The rejected request unexpectedly created a pending spool event.')
+    log.info(f'authentication rejection confirmed; status_code, ``{response.status_code}``')
     return
 
 
@@ -119,6 +150,9 @@ def check_accepted_request(
 
     Called by: run_http_check()
     """
+    log.debug(
+        f'request_action, ``send GitHub push``; listener_url, ``{listener_url}``; delivery_id, ``{delivery_id}``'
+    )
     response = client.post(
         listener_url,
         content=payload_body,
@@ -141,6 +175,10 @@ def check_accepted_request(
         raise RuntimeError(f'Unexpected updated files: {event.files_updated!r}.')
     if event.files_removed != EXPECTED_REMOVED_FILES:
         raise RuntimeError(f'Unexpected removed files: {event.files_removed!r}.')
+    log.info(
+        f'queued event validated; delivery_id, ``{delivery_id}``; event_path, ``{pending_events[0]}``; '
+        f'files_updated, ``{event.files_updated}``; files_removed, ``{event.files_removed}``'
+    )
     return pending_events[0]
 
 
@@ -150,18 +188,24 @@ def run_http_check() -> pathlib.Path:
 
     Called by: main()
     """
+    django.setup()
+    configure_logging()
+    log.info('local HTTP listener check started')
     payload_body = DEFAULT_PAYLOAD_PATH.read_bytes()
     delivery_id = f'local-check-{uuid.uuid4()}'
+    log.debug(
+        f'payload_path, ``{DEFAULT_PAYLOAD_PATH}``; payload_bytes, ``{len(payload_body)}``; '
+        f'delivery_id, ``{delivery_id}``'
+    )
     headers = {
         'Content-Type': 'application/json',
         'User-Agent': 'GitHub-Hookshot/local-web-listener-check',
         'X-GitHub-Delivery': delivery_id,
         'X-GitHub-Event': 'push',
     }
-    django.setup()
-
     with tempfile.TemporaryDirectory(prefix='usep-web-listener-check-') as temporary_directory:
         spool_root = pathlib.Path(temporary_directory) / 'spool'
+        log.debug(f'spool_root, ``{spool_root}``')
         with override_settings(
             ALLOWED_HOSTS=[LOCAL_HOST],
             BASIC_AUTH_USERNAME=LOCAL_USERNAME,
@@ -184,6 +228,7 @@ def run_http_check() -> pathlib.Path:
                 server.shutdown()
                 server.server_close()
                 server_thread.join(timeout=HTTP_TIMEOUT_SECONDS)
+                log.debug(f'local listener stopped; listener_url, ``{listener_url}``')
 
         checked_event_path = pathlib.Path('pending') / event_path.name
     return checked_event_path
@@ -197,7 +242,7 @@ def main() -> None:
     """
     parse_arguments()
     checked_event_path = run_http_check()
-    print(f'web-listener HTTP check passed; validated temporary event {checked_event_path}')
+    log.info(f'local HTTP listener check passed; checked_event_path, ``{checked_event_path}``')
     return
 
 

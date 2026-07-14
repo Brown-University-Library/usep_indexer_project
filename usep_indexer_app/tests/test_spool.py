@@ -22,12 +22,13 @@ class SpoolTests(SimpleTestCase):
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             spool_root = Path(temporary_directory)
-            event_path = spool.write_event(
-                spool_root,
-                'incremental',
-                files_updated=['xml_inscriptions/transcribed/one.xml'],
-                request_id='delivery-1',
-            )
+            with self.assertLogs('usep_indexer_app.lib.spool', level='DEBUG') as captured_logs:
+                event_path = spool.write_event(
+                    spool_root,
+                    'incremental',
+                    files_updated=['xml_inscriptions/transcribed/one.xml'],
+                    request_id='delivery-1',
+                )
             event = spool.load_event(event_path)
             temporary_files = list((spool_root / 'pending').glob('*.tmp'))
 
@@ -35,6 +36,9 @@ class SpoolTests(SimpleTestCase):
         self.assertEqual('delivery-1', event.request_id)
         self.assertEqual(['xml_inscriptions/transcribed/one.xml'], event.files_updated)
         self.assertEqual([], temporary_files)
+        joined_logs = '\n'.join(captured_logs.output)
+        self.assertIn('event saved; event_type, ``incremental``', joined_logs)
+        self.assertIn('request_id, ``delivery-1``', joined_logs)
 
     @patch('usep_indexer_app.lib.spool.os.replace', side_effect=OSError('disk full'))
     def test_failed_atomic_write_removes_temporary_file(self, mock_replace) -> None:

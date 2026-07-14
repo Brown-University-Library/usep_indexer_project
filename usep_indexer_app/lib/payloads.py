@@ -25,6 +25,7 @@ def prepare_files_to_process(request_body: bytes) -> dict[str, object]:
             added, modified, removed = examine_commits(commit_info)
             files_to_process['files_updated'] = added + modified
             files_to_process['files_removed'] = removed
+            log.debug(f'added, ``{added}``; modified, ``{modified}``; removed, ``{removed}``')
         except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError):
             log.exception('Unable to parse GitHub push payload; queuing empty file lists.')
     return files_to_process

@@ -134,6 +134,10 @@ def write_event(
 
     Called by: views.handle_github_push(), views.reindex_all()
     """
+    log.debug(
+        f'spool_root, ``{spool_root}``; event_type, ``{event_type}``; request_id, ``{request_id or "not_provided"}``; '
+        f'files_updated, ``{files_updated or []}``; files_removed, ``{files_removed or []}``'
+    )
     ensure_spool_directories(spool_root)
     document = build_event_document(event_type, files_updated, files_removed, request_id)
     event_id = str(document['event_id'])
@@ -141,6 +145,10 @@ def write_event(
     filename_timestamp = received_at.replace('-', '').replace(':', '').replace('+00:00', 'Z')
     event_path = spool_root / 'pending' / f'{filename_timestamp}_{event_id}.json'
     write_json_atomic(document, event_path)
+    log.info(
+        f'event saved; event_type, ``{event_type}``; request_id, ``{document["request_id"]}``; '
+        f'event_path, ``{event_path}``'
+    )
     return event_path
 
 

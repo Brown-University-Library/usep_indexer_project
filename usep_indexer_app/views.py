@@ -121,27 +121,33 @@ def handle_github_push(request: HttpRequest) -> HttpResponse:
 
     Called by: config.urls.urlpatterns
     """
+    request_id = request.headers.get('X-GitHub-Delivery')
+    logged_request_id = request_id or 'not_provided'
+    log.info(f'github request received; request_id, ``{logged_request_id}``; request_method, ``{request.method}``')
     log.debug(
-        'github request method=%s path=%s remote_addr=%s body_bytes=%s',
-        request.method,
-        request.path,
-        request.META.get('REMOTE_ADDR', 'unknown'),
-        len(request.body),
+        f'request_path, ``{request.path}``; remote_addr, ``{request.META.get("REMOTE_ADDR", "unknown")}``; '
+        f'body_bytes, ``{len(request.body)}``'
     )
     response = HttpResponse('received')
     if request.body or request.path.rstrip('/').endswith('/force'):
         files_to_process = payloads.prepare_files_to_process(request.body)
+        log.debug(
+            f'files_updated, ``{files_to_process["files_updated"]}``; '
+            f'files_removed, ``{files_to_process["files_removed"]}``'
+        )
         try:
             spool.write_event(
                 project_settings.SPOOL_ROOT_PATH,
                 'incremental',
                 files_updated=files_to_process['files_updated'],
                 files_removed=files_to_process['files_removed'],
-                request_id=request.headers.get('X-GitHub-Delivery'),
+                request_id=request_id,
             )
         except OSError:
             log.exception('Unable to durably save the GitHub push event.')
             response = HttpResponse('unable to queue event', status=503)
+    else:
+        log.debug(f'queue_action, ``skipped``; request_id, ``{logged_request_id}``; reason, ``no request body``')
     return response
 
 

@@ -1,11 +1,15 @@
 import base64
 import binascii
+import logging
 import secrets
 from collections.abc import Callable
 from functools import update_wrapper
 
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse
+
+
+log = logging.getLogger(__name__)
 
 
 class BasicAuthProtectedView:
@@ -30,6 +34,11 @@ class BasicAuthProtectedView:
         """
         credentials = parse_basic_auth(request.headers.get('Authorization', ''))
         is_authorized = credentials is not None and credentials_match(*credentials)
+        authorization_result = 'accepted' if is_authorized else 'rejected'
+        log.info(
+            f'authorization_result, ``{authorization_result}``; request_method, ``{request.method}``; '
+            f'request_path, ``{request.path}``'
+        )
         if is_authorized:
             response = self.view_function(request, *args, **kwargs)
         else:
