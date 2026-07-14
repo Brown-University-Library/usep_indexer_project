@@ -48,6 +48,11 @@ If other instruction files exist (Copilot, IDE rules, contributor docs) and conf
 - Do not define functions inside other functions.
 - Favor clarity and explicitness over cleverness.
 
+### Logging
+
+- When adding a log statement, when possible, format variable values as a label, followed by a comma and a space, with the value enclosed in double backticks.
+- Prefer a label that matches the variable name. For example: ```log.debug(f'branch_and_commit, ``{branch_and_commit}``')```
+
 ### HTTP and networking
 
 - Use `httpx` for all HTTP calls.
