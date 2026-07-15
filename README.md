@@ -51,7 +51,7 @@ Indexing requires resources from that usep_data clone, and an accessible Solr co
 ### Install the application
 
 ```bash
-cd /path/to/usep_indexer_project_stuff/
+cd /path/to/usep_indexer_stuff/
 git clone git@github.com:Brown-University-Library/usep_indexer_project.git
 cp ./usep_indexer_project/config/dotenv_example_file.txt ./.env
 mkdir -p ./logs ./cache_dir ./spool_dir
@@ -68,7 +68,7 @@ Before processing queued work:
 - Clone the `usep_data` repository:
 
     ```bash
-    cd /path/to/usep_indexer_project_stuff/
+    cd /path/to/usep_indexer_stuff/
     git clone git@github.com:Brown-University-Library/usep-data.git
     ```
 
@@ -77,7 +77,7 @@ Before processing queued work:
 - Create writable directories for `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH` and `WEBSERVED_DATA_DIR_PATH`.
 
     ```bash
-    cd /path/to/usep_indexer_project_stuff/
+    cd /path/to/usep_indexer_stuff/
     mkdir -p ./temp_unified_inscriptions_dir
     mkdir -p ./webserved_data
     ```
