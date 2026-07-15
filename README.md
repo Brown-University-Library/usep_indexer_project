@@ -121,6 +121,7 @@ The old shell variables map to the similarly named variables in the example file
 Validate the Django configuration before starting the service:
 
 ```bash
+cd /path/to/usep_indexer_stuff/usep_indexer_project/
 uv run ./manage.py check
 uv run ./run_tests.py -v
 ```
