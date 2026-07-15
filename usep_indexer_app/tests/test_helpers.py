@@ -85,6 +85,23 @@ class HelperTests(SimpleTestCase):
             solr_document = indexer.build_solr_document(inscription_path, xsl_path)
         self.assertIn('<field name="id">one</field>', solr_document)
 
+    @patch('usep_indexer_app.lib.indexer.build_solr_document', return_value='<add/>')
+    @patch('usep_indexer_app.lib.indexer.solr_client.post_xml_update', side_effect=RuntimeError('Solr down'))
+    def test_solr_post_failure_logs_source_file(self, mock_post_xml_update, mock_build_solr_document) -> None:
+        """
+        Checks a failed Solr post identifies the inscription file without hiding the original error.
+        """
+        with self.assertLogs('usep_indexer_app.lib.indexer', level='ERROR') as captured_logs:
+            with self.assertRaisesRegex(RuntimeError, 'Solr down'):
+                indexer.update_index_entry('one.xml')
+
+        joined_logs = '\n'.join(captured_logs.output)
+        expected_path = pathlib.Path('/tmp/usep-webserved-data/inscriptions/one.xml')
+        self.assertIn('Solr XML update failed; filename, ``one.xml``', joined_logs)
+        self.assertIn(f'inscription_path, ``{expected_path}``', joined_logs)
+        mock_build_solr_document.assert_called_once()
+        mock_post_xml_update.assert_called_once_with('http://solr.example.org/solr/usep', '<add/>')
+
     @patch('usep_indexer_app.lib.bibliography.solr_client.soft_commit')
     @patch('usep_indexer_app.lib.bibliography.solr_client.post_json_update')
     @patch('usep_indexer_app.lib.bibliography.solr_client.select_bibliography_ids', return_value=['child'])

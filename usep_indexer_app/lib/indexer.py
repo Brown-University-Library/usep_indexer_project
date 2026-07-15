@@ -25,7 +25,11 @@ def update_index_entry(filename: str) -> None:
     """
     inscription_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions' / filename
     solr_xml = build_solr_document(inscription_path, settings.SOLR_XSL_PATH)
-    solr_client.post_xml_update(settings.SOLR_URL, solr_xml)
+    try:
+        solr_client.post_xml_update(settings.SOLR_URL, solr_xml)
+    except Exception:
+        log.error(f'Solr XML update failed; filename, ``{filename}``; inscription_path, ``{inscription_path}``')
+        raise
     inscription_id = filename.removesuffix('.xml')
     update_bibliography(inscription_id)
     update_transcription(inscription_id, inscription_path)
