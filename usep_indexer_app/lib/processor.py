@@ -29,6 +29,7 @@ def call_git_pull(git_clone_path: Path) -> None:
 
     Called by: process_incremental(), reindex.process_full_reindex()
     """
+    log.debug(f'Running Git pull; git_clone_path, ``{git_clone_path}``')
     subprocess.run(['git', 'pull'], cwd=git_clone_path, check=True, text=True)
     return
 
@@ -39,6 +40,11 @@ def copy_files(git_clone_path: Path, temp_unified_inscriptions_dir_path: Path, w
 
     Called by: process_incremental(), reindex.process_full_reindex()
     """
+    log.debug(
+        f'Copying USEP data; git_clone_path, ``{git_clone_path}``; '
+        f'temp_unified_inscriptions_dir_path, ``{temp_unified_inscriptions_dir_path}``; '
+        f'webserved_data_path, ``{webserved_data_path}``'
+    )
     run_rsync(git_clone_path / 'resources', webserved_data_path / 'resources', delete=True)
     run_rsync(git_clone_path / 'xml_inscriptions' / 'bib_only', temp_unified_inscriptions_dir_path, delete=True)
     run_rsync(git_clone_path / 'xml_inscriptions' / 'metadata_only', temp_unified_inscriptions_dir_path, delete=False)
@@ -58,6 +64,9 @@ def run_rsync(source_path: Path, destination_path: Path, delete: bool) -> None:
     if delete:
         command.append('--delete')
     command.extend([source, str(destination_path)])
+    log.debug(
+        f'Running rsync; source_path, ``{source_path}``; destination_path, ``{destination_path}``; delete, ``{delete}``'
+    )
     subprocess.run(command, check=True, text=True)
     return
 
@@ -75,6 +84,7 @@ def update_xinclude_references(inscriptions_path: Path) -> int:
         if updated_xml != original_xml:
             inscription_path.write_text(updated_xml, encoding='utf-8')
             changed_file_count += 1
+            log.debug(f'Updated XInclude references; inscription_path, ``{inscription_path}``')
     return changed_file_count
 
 
@@ -96,13 +106,28 @@ def process_incremental(files_to_update: list[str], files_to_remove: list[str]) 
 
     Called by: spool.process_valid_events()
     """
+    log.info(
+        f'Incremental processing started; files_to_update_count, ``{len(files_to_update)}``; '
+        f'files_to_remove_count, ``{len(files_to_remove)}``'
+    )
     call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
+    log.info(f'Git pull completed; git_clone_path, ``{settings.USEP_DATA_GIT_CLONED_DIR_PATH}``')
     copy_files(
         settings.USEP_DATA_GIT_CLONED_DIR_PATH,
         settings.TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH,
         settings.WEBSERVED_DATA_DIR_PATH,
     )
+    log.info(f'USEP data copy completed; webserved_data_path, ``{settings.WEBSERVED_DATA_DIR_PATH}``')
     inscriptions_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions'
-    update_xinclude_references(inscriptions_path)
+    changed_file_count = update_xinclude_references(inscriptions_path)
+    log.info(
+        f'XInclude normalization completed; inscriptions_path, ``{inscriptions_path}``; '
+        f'changed_file_count, ``{changed_file_count}``'
+    )
+    log.info(
+        f'Incremental Solr indexing started; files_to_update_count, ``{len(files_to_update)}``; '
+        f'files_to_remove_count, ``{len(files_to_remove)}``'
+    )
     indexer.update_index(files_to_update, files_to_remove)
+    log.info('Incremental Solr indexing completed.')
     return

@@ -384,10 +384,17 @@ def process_valid_events(events: list[SpoolEvent]) -> None:
     Called by: process_locked_spool()
     """
     files_updated, files_removed, full_reindex = coalesce_events(events)
+    workflow = 'full_reindex' if full_reindex else 'incremental'
+    log.info(
+        f'Filesystem-queue batch processing started; event_count, ``{len(events)}``; workflow, ``{workflow}``; '
+        f'files_updated_count, ``{len(files_updated)}``; files_removed_count, ``{len(files_removed)}``'
+    )
+    log.debug(f'Coalesced filesystem-queue paths; files_updated, ``{files_updated}``; files_removed, ``{files_removed}``')
     if full_reindex:
         reindex.process_full_reindex()
     else:
         processor.process_incremental(files_updated, files_removed)
+    log.info(f'Filesystem-queue batch processing completed; event_count, ``{len(events)}``; workflow, ``{workflow}``')
     return
 
 

@@ -5,10 +5,14 @@ It composes the shared source-preparation and per-inscription indexing operation
 Solr with the complete filesystem corpus by removing stale document IDs.
 """
 
+import logging
 from pathlib import Path
 
 from django.conf import settings
 from usep_indexer_app.lib import indexer, orphans, processor, solr_client
+
+
+log = logging.getLogger(__name__)
 
 
 def build_inscription_filepaths(inscriptions_path: Path) -> list[str]:
@@ -36,16 +40,29 @@ def process_full_reindex() -> None:
 
     Called by: spool.process_valid_events()
     """
+    log.info('Full reindex processing started.')
     processor.call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
+    log.info(f'Git pull completed; git_clone_path, ``{settings.USEP_DATA_GIT_CLONED_DIR_PATH}``')
     processor.copy_files(
         settings.USEP_DATA_GIT_CLONED_DIR_PATH,
         settings.TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH,
         settings.WEBSERVED_DATA_DIR_PATH,
     )
-    processor.update_xinclude_references(settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions')
-    filepaths = build_inscription_filepaths(settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions')
+    log.info(f'USEP data copy completed; webserved_data_path, ``{settings.WEBSERVED_DATA_DIR_PATH}``')
+    inscriptions_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions'
+    changed_file_count = processor.update_xinclude_references(inscriptions_path)
+    log.info(
+        f'XInclude normalization completed; inscriptions_path, ``{inscriptions_path}``; '
+        f'changed_file_count, ``{changed_file_count}``'
+    )
+    filepaths = build_inscription_filepaths(inscriptions_path)
     ids_to_remove = build_orphaned_ids(filepaths, solr_client.get_ids(settings.SOLR_URL))
+    log.info(
+        f'Full Solr indexing started; inscriptions_to_index_count, ``{len(filepaths)}``; '
+        f'ids_to_remove_count, ``{len(ids_to_remove)}``'
+    )
     update_all_index_entries(filepaths, ids_to_remove)
+    log.info('Full Solr indexing completed.')
     return
 
 
@@ -56,7 +73,9 @@ def update_all_index_entries(inscriptions_to_index: list[str], ids_to_remove: li
     Called by: process_full_reindex()
     """
     for inscription_id in ids_to_remove:
+        log.debug(f'Removing Solr entry during full reindex; inscription_id, ``{inscription_id}``')
         indexer.remove_entry_via_id(inscription_id)
     for file_path in inscriptions_to_index:
+        log.debug(f'Updating Solr entry during full reindex; file_path, ``{file_path}``')
         indexer.update_entry(file_path)
     return

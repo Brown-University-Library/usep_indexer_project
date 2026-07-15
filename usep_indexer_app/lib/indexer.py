@@ -109,12 +109,26 @@ def update_index(files_updated: list[str], files_removed: list[str]) -> None:
 
     Called by: processor.process_incremental()
     """
+    indexable_removed_count = sum(should_index_path(file_path) for file_path in files_removed)
+    indexable_updated_count = sum(should_index_path(file_path) for file_path in files_updated)
+    log.debug(
+        f'Filtered incremental Solr changes; indexable_updated_count, ``{indexable_updated_count}``; '
+        f'indexable_removed_count, ``{indexable_removed_count}``; ignored_updated_count, '
+        f'``{len(files_updated) - indexable_updated_count}``; ignored_removed_count, '
+        f'``{len(files_removed) - indexable_removed_count}``'
+    )
     for removed_file_path in files_removed:
         if should_index_path(removed_file_path):
+            log.debug(f'Removing Solr entry; removed_file_path, ``{removed_file_path}``')
             remove_entry(removed_file_path)
+        else:
+            log.debug(f'Ignoring non-inscription removal; removed_file_path, ``{removed_file_path}``')
     for updated_file_path in files_updated:
         if should_index_path(updated_file_path):
+            log.debug(f'Updating Solr entry; updated_file_path, ``{updated_file_path}``')
             update_entry(updated_file_path)
+        else:
+            log.debug(f'Ignoring non-inscription update; updated_file_path, ``{updated_file_path}``')
     return
 
 

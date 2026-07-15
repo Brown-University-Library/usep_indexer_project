@@ -171,7 +171,7 @@ class HelperTests(SimpleTestCase):
         mock_run.assert_called_once_with(['git', 'pull'], cwd=clone_path, check=True, text=True)
 
     @patch('usep_indexer_app.lib.processor.indexer.update_index')
-    @patch('usep_indexer_app.lib.processor.update_xinclude_references')
+    @patch('usep_indexer_app.lib.processor.update_xinclude_references', return_value=2)
     @patch('usep_indexer_app.lib.processor.copy_files')
     @patch('usep_indexer_app.lib.processor.call_git_pull')
     def test_incremental_processor_runs_synchronous_stages(
@@ -194,6 +194,54 @@ class HelperTests(SimpleTestCase):
         )
         mock_update_xinclude.assert_called_once_with(pathlib.Path('/tmp/usep-webserved-data/inscriptions'))
         mock_update_index.assert_called_once_with(['updated.xml'], ['removed.xml'])
+
+    @patch('usep_indexer_app.lib.processor.indexer.update_index', side_effect=RuntimeError('Solr down'))
+    @patch('usep_indexer_app.lib.processor.update_xinclude_references', return_value=2)
+    @patch('usep_indexer_app.lib.processor.copy_files')
+    @patch('usep_indexer_app.lib.processor.call_git_pull')
+    def test_incremental_processor_logs_completed_file_stages_before_solr_failure(
+        self,
+        mock_git_pull,
+        mock_copy_files,
+        mock_update_xinclude,
+        mock_update_index,
+    ) -> None:
+        """
+        Checks that logs distinguish successful file preparation from a Solr failure.
+        """
+        with self.assertLogs('usep_indexer_app.lib.processor', level='INFO') as captured_logs:
+            with self.assertRaisesRegex(RuntimeError, 'Solr down'):
+                processor.process_incremental(['updated.xml'], ['removed.xml'])
+
+        joined_logs = '\n'.join(captured_logs.output)
+        self.assertIn('Git pull completed', joined_logs)
+        self.assertIn('USEP data copy completed', joined_logs)
+        self.assertIn('XInclude normalization completed', joined_logs)
+        self.assertIn('changed_file_count, ``2``', joined_logs)
+        self.assertIn('Incremental Solr indexing started', joined_logs)
+        self.assertNotIn('Incremental Solr indexing completed', joined_logs)
+        mock_git_pull.assert_called_once()
+        mock_copy_files.assert_called_once()
+        mock_update_xinclude.assert_called_once()
+        mock_update_index.assert_called_once()
+
+    @patch('usep_indexer_app.lib.indexer.update_entry')
+    @patch('usep_indexer_app.lib.indexer.remove_entry')
+    def test_incremental_indexer_logs_actions_and_ignored_paths(self, mock_remove_entry, mock_update_entry) -> None:
+        """
+        Checks debug logs explain which incremental paths affect Solr.
+        """
+        with self.assertLogs('usep_indexer_app.lib.indexer', level='DEBUG') as captured_logs:
+            indexer.update_index(
+                ['resources/titles.xml', 'xml_inscriptions/transcribed/one.xml'],
+                ['xml_inscriptions/bib_only/two.xml'],
+            )
+
+        joined_logs = '\n'.join(captured_logs.output)
+        self.assertIn('indexable_updated_count, ``1``', joined_logs)
+        self.assertIn('Removing Solr entry; removed_file_path, ``xml_inscriptions/bib_only/two.xml``', joined_logs)
+        self.assertIn('Ignoring non-inscription update; updated_file_path, ``resources/titles.xml``', joined_logs)
+        self.assertIn('Updating Solr entry; updated_file_path, ``xml_inscriptions/transcribed/one.xml``', joined_logs)
 
     @patch('usep_indexer_app.lib.reindex.indexer.update_entry')
     @patch('usep_indexer_app.lib.reindex.indexer.remove_entry_via_id')
