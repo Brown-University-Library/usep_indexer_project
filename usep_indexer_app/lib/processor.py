@@ -96,9 +96,9 @@ def process_incremental(files_to_update: list[str], files_to_remove: list[str]) 
 
     Called by: spool.process_valid_events()
     """
-    call_git_pull(settings.GIT_CLONED_DIR_PATH)
+    call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
     copy_files(
-        settings.GIT_CLONED_DIR_PATH,
+        settings.USEP_DATA_GIT_CLONED_DIR_PATH,
         settings.TEMP_DATA_DIR_PATH,
         settings.WEBSERVED_DATA_DIR_PATH,
     )

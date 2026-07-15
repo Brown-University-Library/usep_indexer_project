@@ -68,7 +68,7 @@ CACHES = {
 
 BASIC_AUTH_USERNAME = 'test-user'
 BASIC_AUTH_PASSWORD = 'test-password'
-GIT_CLONED_DIR_PATH = pathlib.Path('/tmp/usep-data-clone')
+USEP_DATA_GIT_CLONED_DIR_PATH = pathlib.Path('/tmp/usep-data-clone')
 TEMP_DATA_DIR_PATH = pathlib.Path('/tmp/usep-unified-inscriptions')
 WEBSERVED_DATA_DIR_PATH = pathlib.Path('/tmp/usep-webserved-data')
 SOLR_URL = 'http://solr.example.org/solr/usep'

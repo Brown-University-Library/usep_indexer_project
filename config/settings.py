@@ -78,7 +78,7 @@ CACHES = json.loads(os.environ['CACHES_JSON'])
 
 BASIC_AUTH_USERNAME = os.environ['BASIC_AUTH_USERNAME']
 BASIC_AUTH_PASSWORD = os.environ['BASIC_AUTH_PASSWORD']
-GIT_CLONED_DIR_PATH = pathlib.Path(os.environ['GIT_CLONED_DIR_PATH'])
+USEP_DATA_GIT_CLONED_DIR_PATH = pathlib.Path(os.environ['USEP_DATA_GIT_CLONED_DIR_PATH'])
 TEMP_DATA_DIR_PATH = pathlib.Path(os.environ['TEMP_DATA_DIR_PATH'])
 WEBSERVED_DATA_DIR_PATH = pathlib.Path(os.environ['WEBSERVED_DATA_DIR_PATH'])
 SOLR_URL = os.environ['SOLR_URL'].rstrip('/')

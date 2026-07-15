@@ -36,9 +36,9 @@ def process_full_reindex() -> None:
 
     Called by: spool.process_valid_events()
     """
-    processor.call_git_pull(settings.GIT_CLONED_DIR_PATH)
+    processor.call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
     processor.copy_files(
-        settings.GIT_CLONED_DIR_PATH,
+        settings.USEP_DATA_GIT_CLONED_DIR_PATH,
         settings.TEMP_DATA_DIR_PATH,
         settings.WEBSERVED_DATA_DIR_PATH,
     )

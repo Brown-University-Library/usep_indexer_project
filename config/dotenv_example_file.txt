@@ -16,7 +16,7 @@ CACHES_JSON='{"default": {"BACKEND": "django.core.cache.backends.filebased.FileB
 
 BASIC_AUTH_USERNAME="replace_me"
 BASIC_AUTH_PASSWORD="replace_me"
-GIT_CLONED_DIR_PATH="/path/to/usep_data_clone"
+USEP_DATA_GIT_CLONED_DIR_PATH="/path/to/usep_data_clone"
 TEMP_DATA_DIR_PATH="/path/to/temp_unified_inscriptions"
 WEBSERVED_DATA_DIR_PATH="/path/to/webserved/usep_data"
 SOLR_URL="http://127.0.0.1:8983/solr/us_epigraphy"
