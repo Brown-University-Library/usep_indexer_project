@@ -5,7 +5,8 @@ This module bridges the TEI hierarchy in ``titles.xml`` and Solr's atomic-update
 inscription's direct bibliography references also expose their ancestor references.
 """
 
-import httpx
+from pathlib import Path
+
 from lxml import etree
 from usep_indexer_app.lib import solr_client
 
@@ -13,16 +14,14 @@ from usep_indexer_app.lib import solr_client
 TEI_NAMESPACE = {'tei': 'http://www.tei-c.org/ns/1.0'}
 
 
-def add_bibliography(solr_url: str, titles_url: str, inscription_id: str) -> bool:
+def add_bibliography(solr_url: str, titles_xml_path: Path, inscription_id: str) -> bool:
     """
     Adds ancestor bibliography IDs from titles.xml to a Solr inscription.
 
     Called by: indexer.update_bibliography()
     """
-    titles_response = httpx.get(titles_url, timeout=solr_client.DEFAULT_TIMEOUT)
-    titles_response.raise_for_status()
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
-    titles_xml = etree.fromstring(titles_response.content, parser=parser)
+    titles_xml = etree.parse(titles_xml_path, parser=parser)
 
     direct_bib_ids = solr_client.select_bibliography_ids(solr_url, inscription_id)
     ancestor_ids: set[str] = set()

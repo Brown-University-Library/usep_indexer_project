@@ -102,9 +102,7 @@ Before processing queued work:
 
     That connection will stay open as long as the terminal tab is open.
 
-- Arrange for the copied `WEBSERVED_DATA_DIR_PATH/resources` directory to be served over HTTP. `TITLES_URL` must return its `titles.xml` file during indexing.
-
-- Point `SOLR_XSL_PATH` and `TRANSCRIPTION_PARSER_XSL_PATH` to the corresponding XSL files under `WEBSERVED_DATA_DIR_PATH/resources/xsl`. These files appear after the processor's initial copy from `usep_data` and must be readable when indexing begins.
+- Point the `SOLR_XSL_PATH` and `TRANSCRIPTION_PARSER_XSL_PATH` `.env` entries to the corresponding XSL files under `WEBSERVED_DATA_DIR_PATH/resources/xsl`. The processor reads `titles.xml` directly from `WEBSERVED_DATA_DIR_PATH/resources`. These files appear after the processor's initial copy from `usep_data` and must be readable when indexing begins.
 
 ### Configure the environment
 
@@ -113,7 +111,7 @@ Update the outer `.env` using `config/dotenv_example_file.txt` as the checklist.
 - Replace the Django secret, Basic Auth credentials, hosts, trusted origins, and IP allowlist. For ordinary local HTTP development, keep `DEBUG_JSON="true"` and `SESSION_COOKIE_SECURE_JSON="false"`.
 - Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_DATA_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by both the web-service and processor accounts.
 - Keep `SPOOL_ROOT_PATH` on durable, non-ephemeral local storage that supports atomic rename and `flock`. The application creates the queue's lifecycle subdirectories automatically.
-- Set `SOLR_URL`, `SOLR_XSL_PATH`, `TITLES_URL`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the local services and copied resources prepared above.
+- Set `SOLR_URL`, `SOLR_XSL_PATH`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the local service and copied resources prepared above.
 - Review the file-based cache, static-file, email, queue-retention, and queue-health settings. The email server is only used for admin error notifications, but its settings are required when Django loads.
 
 The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.

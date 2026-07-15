@@ -21,7 +21,6 @@ TEMP_DATA_DIR_PATH="/path/to/temp_unified_inscriptions"
 WEBSERVED_DATA_DIR_PATH="/path/to/webserved/usep_data"
 SOLR_URL="http://127.0.0.1:8983/solr/us_epigraphy"
 SOLR_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/USEp_to_Solr.xsl"
-TITLES_URL="http://127.0.0.1/usep_data/resources/titles.xml"
 TRANSCRIPTION_PARSER_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/transcription_index_val.xsl"
 LEGIT_IPS_JSON='["127.0.0.1"]'
 SPOOL_ROOT_PATH="/path/to/durable/usep_indexer_spool"

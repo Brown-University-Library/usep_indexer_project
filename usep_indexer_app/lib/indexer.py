@@ -54,7 +54,7 @@ def update_bibliography(inscription_id: str) -> None:
     Called by: update_index_entry()
     """
     try:
-        bibliography.add_bibliography(settings.SOLR_URL, settings.TITLES_URL, inscription_id)
+        bibliography.add_bibliography(settings.SOLR_URL, settings.TITLES_XML_PATH, inscription_id)
     except Exception:
         log.exception('Unable to update bibliography for %s.', inscription_id)
     return

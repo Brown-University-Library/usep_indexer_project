@@ -4,7 +4,7 @@ import tempfile
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
-from usep_indexer_app.lib import indexer, orphans, payloads, processor, reindex, transcription
+from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, processor, reindex, transcription
 
 
 class HelperTests(SimpleTestCase):
@@ -84,6 +84,47 @@ class HelperTests(SimpleTestCase):
             xsl_path.write_text(xsl_text, encoding='utf-8')
             solr_document = indexer.build_solr_document(inscription_path, xsl_path)
         self.assertIn('<field name="id">one</field>', solr_document)
+
+    @patch('usep_indexer_app.lib.bibliography.solr_client.soft_commit')
+    @patch('usep_indexer_app.lib.bibliography.solr_client.post_json_update')
+    @patch('usep_indexer_app.lib.bibliography.solr_client.select_bibliography_ids', return_value=['child'])
+    def test_bibliography_reads_titles_xml_from_local_path(
+        self,
+        mock_select_bibliography_ids,
+        mock_post_json_update,
+        mock_soft_commit,
+    ) -> None:
+        """
+        Checks that bibliography enrichment reads ancestor IDs from a local titles XML file.
+        """
+        titles_xml = """
+            <listBibl xmlns="http://www.tei-c.org/ns/1.0">
+                <bibl xml:id="parent"><bibl xml:id="child"/></bibl>
+            </listBibl>
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            titles_xml_path = pathlib.Path(temporary_directory) / 'titles.xml'
+            titles_xml_path.write_text(titles_xml, encoding='utf-8')
+            result = bibliography.add_bibliography('http://solr.example.org/solr/usep', titles_xml_path, 'one')
+
+        self.assertTrue(result)
+        mock_select_bibliography_ids.assert_called_once_with('http://solr.example.org/solr/usep', 'one')
+        mock_post_json_update.assert_called_once_with(
+            'http://solr.example.org/solr/usep',
+            [{'id': 'one', 'bib_ids': {'add': ['parent']}}],
+        )
+        mock_soft_commit.assert_called_once_with('http://solr.example.org/solr/usep')
+
+    @patch('usep_indexer_app.lib.bibliography.solr_client.select_bibliography_ids')
+    def test_bibliography_rejects_missing_titles_xml_path(self, mock_select_bibliography_ids) -> None:
+        """
+        Checks that a missing local titles XML file raises a filesystem error before contacting Solr.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            missing_path = pathlib.Path(temporary_directory) / 'missing.xml'
+            with self.assertRaises(OSError):
+                bibliography.add_bibliography('http://solr.example.org/solr/usep', missing_path, 'one')
+        mock_select_bibliography_ids.assert_not_called()
 
     def test_orphan_list_is_sorted_set_difference(self) -> None:
         """
