@@ -13,8 +13,18 @@ The project intentionally has no database. It omits Django admin, auth, contentt
 _(Terms: the term `spool`, used below and in the project, refers to the filesystem-backed work queue where accepted requests are stored as event files until the processor handles them.)_
 
 
+## Overveiw
+
+There are three main parts to this webapp:
+
+- A listener that receives GitHub push webhooks and saves them to a file-based queue.
+- A processor that is run on a cron schedule, reads events from the queue, pulls the latest `usep_data` from GitHub, and reorganizes the files.
+- An indexer, invoked by the processor, that prepares the Solr documents and posts the updates to Solr.
+
+
 ## Table of contents
 
+- [Overveiw](#overveiw)
 - [Requirements](#requirements)
 - [Setup](#setup)
 - [Endpoints](#endpoints)
