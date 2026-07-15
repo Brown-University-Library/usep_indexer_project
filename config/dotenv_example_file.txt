@@ -1,3 +1,6 @@
+## DJANGO SETTINGS --------------------------------------------------
+
+## Django core/security settings ------------------------------------
 SECRET_KEY="replace_with_a_long_random_value"
 DEBUG_JSON="true"
 ADMINS_JSON='[["Example Admin", "admin@example.org"]]'
@@ -5,6 +8,7 @@ ALLOWED_HOSTS_JSON='["127.0.0.1", "localhost"]'
 CSRF_TRUSTED_ORIGINS_JSON='[]'
 SESSION_COOKIE_SECURE_JSON="false"
 
+## Django path settings ---------------------------------------------
 STATIC_URL="/static/"
 STATIC_ROOT="../static_root"
 SERVER_EMAIL="donotreply@example.org"
@@ -14,18 +18,25 @@ LOG_PATH="../logs/usep_indexer.log"
 LOG_LEVEL="DEBUG"
 CACHES_JSON='{"default": {"BACKEND": "django.core.cache.backends.filebased.FileBasedCache", "LOCATION": "../cache_dir", "TIMEOUT": 0}}'
 
+## APP SETTINGS -----------------------------------------------------
+
+## app_listener settings -------------------------------------------
 BASIC_AUTH_USERNAME="replace_me"
 BASIC_AUTH_PASSWORD="replace_me"
+LEGIT_IPS_JSON='["127.0.0.1"]'
+README_URL="https://github.com/Brown-University-Library/usep_indexer_project"
+
+## app_processor settings ------------------------------------------
 USEP_DATA_GIT_CLONED_DIR_PATH="/path/to/usep_data_clone"
 TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH="/path/to/temp_unified_inscriptions_dir"
 WEBSERVED_DATA_DIR_PATH="/path/to/webserved/usep_data"
-SOLR_URL="http://127.0.0.1:8983/solr/us_epigraphy"
-SOLR_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/USEp_to_Solr.xsl"
-TRANSCRIPTION_PARSER_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/transcription_index_val.xsl"
-LEGIT_IPS_JSON='["127.0.0.1"]'
 SPOOL_ROOT_PATH="/path/to/durable/usep_indexer_spool"
 SPOOL_MAX_ATTEMPTS="3"
 SPOOL_BATCH_SIZE="100"
 SPOOL_COMPLETED_RETENTION_DAYS="30"
 SPOOL_HEALTH_MAX_AGE_SECONDS="300"
-README_URL="https://github.com/Brown-University-Library/usep_indexer_project"
+
+## app_indexer settings --------------------------------------------
+SOLR_URL="http://127.0.0.1:8983/solr/us_epigraphy"
+SOLR_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/USEp_to_Solr.xsl"
+TRANSCRIPTION_PARSER_XSL_PATH="/path/to/webserved/usep_data/resources/xsl/transcription_index_val.xsl"
