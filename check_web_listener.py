@@ -43,28 +43,61 @@ LOCAL_HOST = '127.0.0.1'
 LOCAL_USERNAME = 'local-webhook-check'
 LOCAL_PASSWORD = 'local-webhook-password'
 HTTP_TIMEOUT_SECONDS = 5.0
+LOG_FORMAT = '[%(asctime)s] %(levelname)s [%(module)s-%(funcName)s()::%(lineno)d] %(message)s'
+LOG_DATE_FORMAT = '%d/%b/%Y %H:%M:%S'
 
 
-def configure_logging() -> None:
+def load_real_log_configuration() -> tuple[pathlib.Path, int]:
     """
-    Displays development and server-flow messages for the local check.
+    Loads the configured log path and level from the outer environment file.
+
+    Called by: configure_logging()
+    """
+    environment_values = dotenv_values(DOTENV_PATH)
+    configured_log_path = environment_values.get('LOG_PATH')
+    if not configured_log_path:
+        raise RuntimeError(f'LOG_PATH is not configured in {DOTENV_PATH}.')
+
+    log_path = pathlib.Path(configured_log_path).expanduser()
+    if not log_path.is_absolute():
+        log_path = PROJECT_ROOT_PATH / log_path
+    log_path = log_path.resolve()
+
+    configured_log_level = (environment_values.get('LOG_LEVEL') or 'INFO').upper()
+    log_level = logging.getLevelNamesMapping().get(configured_log_level)
+    if log_level is None:
+        raise RuntimeError(f'LOG_LEVEL {configured_log_level!r} in {DOTENV_PATH} is not valid.')
+    return log_path, log_level
+
+
+def configure_logging(use_real_directory: bool) -> None:
+    """
+    Displays check messages and, in real-directory mode, writes them to the configured log.
 
     Called by: run_http_check()
     """
+    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG)
-    console_handler.setFormatter(
-        logging.Formatter(
-            '[%(asctime)s] %(levelname)s [%(module)s-%(funcName)s()::%(lineno)d] %(message)s',
-            datefmt='%d/%b/%Y %H:%M:%S',
-        )
-    )
-    for logger_name in (__name__, 'usep_indexer_app'):
-        configured_logger = logging.getLogger(logger_name)
+    console_handler.setFormatter(formatter)
+    new_handlers: list[logging.Handler] = [console_handler]
+    if use_real_directory:
+        log_path, log_level = load_real_log_configuration()
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(formatter)
+        new_handlers.append(file_handler)
+
+    configured_loggers = [logging.getLogger(logger_name) for logger_name in (__name__, 'usep_indexer_app')]
+    old_handlers = {handler for configured_logger in configured_loggers for handler in configured_logger.handlers}
+    for configured_logger in configured_loggers:
         configured_logger.handlers.clear()
-        configured_logger.addHandler(console_handler)
+        for handler in new_handlers:
+            configured_logger.addHandler(handler)
         configured_logger.setLevel(logging.DEBUG)
         configured_logger.propagate = False
+    for handler in old_handlers:
+        handler.close()
     return
 
 
@@ -257,7 +290,7 @@ def run_http_check(payload_path: pathlib.Path, use_real_directory: bool) -> path
     Called by: main()
     """
     django.setup()
-    configure_logging()
+    configure_logging(use_real_directory)
     log.info('local HTTP listener check started')
     log.debug(f'payload_path, ``{payload_path}``')
     payload_body = payload_path.read_bytes()

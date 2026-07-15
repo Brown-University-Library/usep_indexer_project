@@ -1,3 +1,4 @@
+import logging
 import pathlib
 import sys
 import tempfile
@@ -98,3 +99,84 @@ class CheckWebListenerSpoolTests(SimpleTestCase):
             )
 
         self.assertEqual([expected_event], matching_events)
+
+
+class CheckWebListenerLoggingTests(SimpleTestCase):
+    """
+    Checks terminal and persistent logging for the local HTTP listener script.
+    """
+
+    def setUp(self) -> None:
+        """
+        Preserves the logging configuration replaced by each test.
+
+        Called by: Django test runner
+        """
+        super().setUp()
+        self.configured_loggers: list[logging.Logger] = [
+            logging.getLogger(logger_name) for logger_name in (check_web_listener.__name__, 'usep_indexer_app')
+        ]
+        self.original_configurations: list[tuple[list[logging.Handler], int, bool]] = [
+            (list(configured_logger.handlers), configured_logger.level, configured_logger.propagate)
+            for configured_logger in self.configured_loggers
+        ]
+        return
+
+    def tearDown(self) -> None:
+        """
+        Restores the logging configuration after each test.
+
+        Called by: Django test runner
+        """
+        replacement_handlers = {
+            handler for configured_logger in self.configured_loggers for handler in configured_logger.handlers
+        }
+        for configured_logger, original_configuration in zip(
+            self.configured_loggers,
+            self.original_configurations,
+            strict=True,
+        ):
+            original_handlers, original_level, original_propagate = original_configuration
+            configured_logger.handlers = original_handlers
+            configured_logger.setLevel(original_level)
+            configured_logger.propagate = original_propagate
+        for handler in replacement_handlers:
+            handler.close()
+        super().tearDown()
+        return
+
+    def test_real_directory_mode_logs_script_and_application_messages_to_file(self) -> None:
+        """
+        Checks that real-directory mode adds the configured file handler.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            log_path = pathlib.Path(temporary_directory) / 'usep_indexer.log'
+            environment_values = {'LOG_PATH': str(log_path), 'LOG_LEVEL': 'DEBUG'}
+            with patch('check_web_listener.dotenv_values', return_value=environment_values):
+                check_web_listener.configure_logging(use_real_directory=True)
+
+            check_web_listener.log.info('script-file-log-check')
+            logging.getLogger('usep_indexer_app.test').debug('application-file-log-check')
+            for configured_logger in self.configured_loggers:
+                for handler in configured_logger.handlers:
+                    handler.flush()
+
+            log_contents = log_path.read_text()
+
+        self.assertIn('script-file-log-check', log_contents)
+        self.assertIn('application-file-log-check', log_contents)
+
+    @patch('check_web_listener.dotenv_values')
+    def test_temporary_directory_mode_does_not_load_file_logging(self, mock_dotenv_values) -> None:
+        """
+        Checks that isolated mode retains terminal-only logging without requiring the outer environment file.
+        """
+        check_web_listener.configure_logging(use_real_directory=False)
+
+        configured_handlers = {
+            handler for configured_logger in self.configured_loggers for handler in configured_logger.handlers
+        }
+
+        self.assertEqual(1, len(configured_handlers))
+        self.assertTrue(all(type(handler) is logging.StreamHandler for handler in configured_handlers))
+        mock_dotenv_values.assert_not_called()
