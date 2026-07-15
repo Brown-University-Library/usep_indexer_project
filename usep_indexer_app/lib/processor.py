@@ -33,17 +33,17 @@ def call_git_pull(git_clone_path: Path) -> None:
     return
 
 
-def copy_files(git_clone_path: Path, temp_data_path: Path, webserved_data_path: Path) -> None:
+def copy_files(git_clone_path: Path, temp_unified_inscriptions_dir_path: Path, webserved_data_path: Path) -> None:
     """
     Mirrors resources and flattens the three inscription source directories.
 
     Called by: process_incremental(), reindex.process_full_reindex()
     """
     run_rsync(git_clone_path / 'resources', webserved_data_path / 'resources', delete=True)
-    run_rsync(git_clone_path / 'xml_inscriptions' / 'bib_only', temp_data_path, delete=True)
-    run_rsync(git_clone_path / 'xml_inscriptions' / 'metadata_only', temp_data_path, delete=False)
-    run_rsync(git_clone_path / 'xml_inscriptions' / 'transcribed', temp_data_path, delete=False)
-    run_rsync(temp_data_path, webserved_data_path / 'inscriptions', delete=True)
+    run_rsync(git_clone_path / 'xml_inscriptions' / 'bib_only', temp_unified_inscriptions_dir_path, delete=True)
+    run_rsync(git_clone_path / 'xml_inscriptions' / 'metadata_only', temp_unified_inscriptions_dir_path, delete=False)
+    run_rsync(git_clone_path / 'xml_inscriptions' / 'transcribed', temp_unified_inscriptions_dir_path, delete=False)
+    run_rsync(temp_unified_inscriptions_dir_path, webserved_data_path / 'inscriptions', delete=True)
     return
 
 
@@ -99,7 +99,7 @@ def process_incremental(files_to_update: list[str], files_to_remove: list[str]) 
     call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
     copy_files(
         settings.USEP_DATA_GIT_CLONED_DIR_PATH,
-        settings.TEMP_DATA_DIR_PATH,
+        settings.TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH,
         settings.WEBSERVED_DATA_DIR_PATH,
     )
     inscriptions_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions'

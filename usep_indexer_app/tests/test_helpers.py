@@ -189,7 +189,7 @@ class HelperTests(SimpleTestCase):
         mock_git_pull.assert_called_once_with(pathlib.Path('/tmp/usep-data-clone'))
         mock_copy_files.assert_called_once_with(
             pathlib.Path('/tmp/usep-data-clone'),
-            pathlib.Path('/tmp/usep-unified-inscriptions'),
+            pathlib.Path('/tmp/temp_unified_inscriptions_dir'),
             pathlib.Path('/tmp/usep-webserved-data'),
         )
         mock_update_xinclude.assert_called_once_with(pathlib.Path('/tmp/usep-webserved-data/inscriptions'))

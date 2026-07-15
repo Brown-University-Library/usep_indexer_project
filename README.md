@@ -74,11 +74,11 @@ Before processing queued work:
 
     Confirm that `git pull` works in that clone with the account that will run the processor. Set the `USEP_DATA_GIT_CLONED_DIR_PATH` `.env` entry to the clone's absolute path.
 
-- Create writable directories for `TEMP_DATA_DIR_PATH` and `WEBSERVED_DATA_DIR_PATH`. 
+- Create writable directories for `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH` and `WEBSERVED_DATA_DIR_PATH`.
 
     ```bash
     cd /path/to/usep_indexer_project_stuff/
-    mkdir -p ./temp_data
+    mkdir -p ./temp_unified_inscriptions_dir
     mkdir -p ./webserved_data
     ```
 
@@ -111,7 +111,7 @@ Before processing queued work:
 Update the outer `.env` using `config/dotenv_example_file.txt` as the checklist. In particular:
 
 - Replace the Django secret, Basic Auth credentials, hosts, trusted origins, and IP allowlist. For ordinary local HTTP development, keep `DEBUG_JSON="true"` and `SESSION_COOKIE_SECURE_JSON="false"`.
-- Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_DATA_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by both the web-service and processor accounts.
+- Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by both the web-service and processor accounts.
 - Keep `SPOOL_ROOT_PATH` on durable, non-ephemeral local storage that supports atomic rename and `flock`. The application creates the queue's lifecycle subdirectories automatically.
 - Set `SOLR_URL`, `SOLR_XSL_PATH`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the local service and copied resources prepared above.
 - Review the file-based cache, static-file, email, queue-retention, and queue-health settings. The email server is only used for admin error notifications, but its settings are required when Django loads.

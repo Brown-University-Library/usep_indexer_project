@@ -39,7 +39,7 @@ def process_full_reindex() -> None:
     processor.call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
     processor.copy_files(
         settings.USEP_DATA_GIT_CLONED_DIR_PATH,
-        settings.TEMP_DATA_DIR_PATH,
+        settings.TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH,
         settings.WEBSERVED_DATA_DIR_PATH,
     )
     processor.update_xinclude_references(settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions')
