@@ -84,6 +84,8 @@ Before processing queued work:
 
     The processor uses `rsync` to flatten the three `usep_data` inscription directories into the temporary directory and mirror the resulting inscriptions and resources into the web-served directory.
 
+    Note that for getting this webapp running, the `webserved_data` does not actually need to be served via http -- but on the dev and prod servers it must be, because the front-end webapp will make http calls to it.
+
 - Start or otherwise obtain access to a compatible USEP Solr core and set `SOLR_URL`. Or create an ssh-tunnel:
 
     (Assumes Solr is locked down to only allow access from a dev or prod server via IP.)
