@@ -51,12 +51,12 @@ Indexing requires resources from that usep_data clone, and an accessible Solr co
 ### Install the application
 
 ```bash
-% cd /path/to/usep_indexer_project_stuff/
-% git clone git@github.com:Brown-University-Library/usep_indexer_project.git
-% cp ./usep_indexer_project/config/dotenv_example_file.txt ./.env
-% mkdir -p ./logs ./cache_dir ./spool_dir
-% cd ./usep_indexer_project
-% uv sync --upgrade
+cd /path/to/usep_indexer_project_stuff/
+git clone git@github.com:Brown-University-Library/usep_indexer_project.git
+cp ./usep_indexer_project/config/dotenv_example_file.txt ./.env
+mkdir -p ./logs ./cache_dir ./spool_dir
+cd ./usep_indexer_project
+uv sync --upgrade
 ```
 
 The application deliberately reads `.env` from the directory above the repository. This keeps local or deployment settings outside the Git checkout.
@@ -68,8 +68,8 @@ Before processing queued work:
 - Clone the `usep_data` repository:
 
     ```bash
-    % cd /path/to/usep_indexer_project_stuff/
-    % git clone git@github.com:Brown-University-Library/usep-data.git
+    cd /path/to/usep_indexer_project_stuff/
+    git clone git@github.com:Brown-University-Library/usep-data.git
     ```
 
     Confirm that `git pull` works in that clone with the account that will run the processor. Set the `USEP_DATA_GIT_CLONED_DIR_PATH` `.env` entry to the clone's absolute path.
@@ -77,10 +77,9 @@ Before processing queued work:
 - Create writable directories for `TEMP_DATA_DIR_PATH` and `WEBSERVED_DATA_DIR_PATH`. 
 
     ```bash
-    % pwd
-    /path/to/usep_indexer_project_stuff/
-    % mkdir ./temp_data
-    % mkdir ./webserved_data
+    cd /path/to/usep_indexer_project_stuff/
+    mkdir -p ./temp_data
+    mkdir -p ./webserved_data
     ```
 
     The processor uses `rsync` to flatten the three `usep_data` inscription directories into the temporary directory and mirror the resulting inscriptions and resources into the web-served directory.
@@ -97,7 +96,7 @@ Before processing queued work:
     
     The -L 9999:solr-server.domain.edu:1234 flag forwards local port 9999 through dev-server.domain.edu to Solr at solr-server.domain.edu:1234.
 
-    This, then, allows you to set this `.env` entry: `SOLR_URL="http://127.0.0.1:9999/solr-root/select/"`.
+    This, then, allows you to set this `.env` entry: `SOLR_URL="http://127.0.0.1:9999/solr/us_epigraphy"`.
 
     Running that ssh command won't show any output, but you can confirm the tunnel is working by opening <http://127.0.0.1:9999/solr/#/> in a browser.
 
