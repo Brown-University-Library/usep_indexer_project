@@ -26,7 +26,7 @@ There are three main parts to this webapp:
 
 - [Overveiw](#overveiw)
 - [Requirements](#requirements)
-- [Setup](#setup)
+- [Local installation](#local-installation)
 - [Endpoints](#endpoints)
 - [Local HTTP listener check](#local-http-listener-check)
 - [Tests](#tests)
@@ -38,7 +38,7 @@ There are three main parts to this webapp:
 - Access to the [usep_data](https://github.com/Brown-University-Library/usep-data) clone, web-served data directory, and Solr core
 - A local POSIX filesystem supporting atomic rename and `flock` for the durable file-queue
 
-## Setup
+## Local installation
 
 The listener, the queue processor, and the indexer have different dependencies. 
 
