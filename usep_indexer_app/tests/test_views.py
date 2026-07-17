@@ -139,7 +139,7 @@ class ViewTests(SimpleTestCase):
 
     @override_settings(
         WEBSERVED_DATA_DIR_PATH=pathlib.Path('/private/deployment/usep-data'),
-        SOLR_URL='https://internal-solr.example.org/solr/private-core',
+        SOLR_URL='https://dev-internal-solr.example.org/solr/private-core',
     )
     @patch('usep_indexer_app.views.orphans.prep_orphan_list', return_value=['orphan-1'])
     def test_list_orphans_omits_infrastructure_details(self, mock_prep) -> None:
@@ -150,11 +150,12 @@ class ViewTests(SimpleTestCase):
         json_data = json_response.json()
         self.assertNotIn('inscriptions_dir_path', json_data)
         self.assertNotIn('solr_url', json_data)
+        self.assertEqual('configured dev Solr index', json_data['solr_index_label'])
 
         html_response = self.client.get('/list_orphans/', **self.auth_header)
         self.assertNotContains(html_response, '/private/deployment/usep-data')
-        self.assertNotContains(html_response, 'internal-solr.example.org')
-        self.assertContains(html_response, 'configured Solr index')
+        self.assertNotContains(html_response, 'dev-internal-solr.example.org')
+        self.assertContains(html_response, 'configured dev Solr index')
         self.assertEqual(2, mock_prep.call_count)
 
     @patch('usep_indexer_app.views.orphans.run_deletes', return_value=[])

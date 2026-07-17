@@ -162,7 +162,7 @@ The production processor is intended to run every other minute. The command take
 | `/` | GET, POST | Basic Auth | GitHub push listener |
 | `/force/` | GET, POST | Basic Auth | Legacy manual listener trigger |
 | `/reindex_all/` | GET | Basic Auth | Enqueue full pull, copy, and reindex |
-| `/list_orphans/` | GET | Basic Auth | Compare filesystem and Solr IDs without exposing configured locations; add `?format=json` for JSON |
+| `/list_orphans/` | GET | Basic Auth | Compare filesystem and Solr IDs, identify the index as dev/prod without exposing configured locations; add `?format=json` for JSON |
 | `/orphan_handler/` | GET | Basic Auth | Confirm or cancel orphan deletion |
 | `/daemon_check/` | GET | Source-IP allowlist | Report processor freshness and queue backlog |
 | `/info/` | GET | Public | Service metadata |

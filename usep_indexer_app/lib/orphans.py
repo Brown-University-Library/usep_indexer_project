@@ -8,6 +8,7 @@ to support both the orphan administration flow and full reindexing.
 import datetime
 import logging
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from usep_indexer_app.lib import solr_client
@@ -55,6 +56,22 @@ def build_orphan_list(directory_ids: list[str], solr_ids: list[str]) -> list[str
     return sorted(set(solr_ids) - set(directory_ids))
 
 
+def build_solr_index_label(solr_url: str) -> str:
+    """
+    Builds a safe environment label from the first character of the Solr host.
+
+    Called by: prep_context()
+    """
+    hostname = urlsplit(solr_url).hostname or ''
+    hostname_initial = hostname[:1].lower()
+    label = 'configured Solr index'
+    if hostname_initial == 'd':
+        label = 'configured dev Solr index'
+    elif hostname_initial == 'p':
+        label = 'configured prod Solr index'
+    return label
+
+
 def prep_context(
     orphan_ids: list[str],
     orphan_handler_url: str,
@@ -68,6 +85,7 @@ def prep_context(
     context: dict[str, object] = {
         'data': orphan_ids,
         'orphan_handler_url': orphan_handler_url,
+        'solr_index_label': build_solr_index_label(settings.SOLR_URL),
         'time_taken': str(datetime.datetime.now() - start_time),
     }
     return context

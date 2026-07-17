@@ -150,6 +150,19 @@ class HelperTests(SimpleTestCase):
         result = orphans.build_orphan_list(['one', 'three'], ['three', 'two', 'one', 'four'])
         self.assertEqual(['four', 'two'], result)
 
+    def test_solr_index_label_uses_hostname_environment_prefix(self) -> None:
+        """
+        Checks safe dev/prod labels and the neutral fallback without exposing a host.
+        """
+        test_cases = {
+            'https://dev-solr.example.org/solr/usep': 'configured dev Solr index',
+            'https://Prod-solr.example.org/solr/usep': 'configured prod Solr index',
+            'http://127.0.0.1:9999/solr/usep': 'configured Solr index',
+        }
+        for solr_url, expected_label in test_cases.items():
+            with self.subTest(solr_url=solr_url):
+                self.assertEqual(expected_label, orphans.build_solr_index_label(solr_url))
+
     def test_full_reindex_orphan_ids_come_from_file_stems(self) -> None:
         """
         Checks full reindex filesystem-to-Solr comparison.
