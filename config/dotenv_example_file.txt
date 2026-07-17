@@ -8,7 +8,7 @@ ALLOWED_HOSTS_JSON='["127.0.0.1", "localhost"]'
 CSRF_TRUSTED_ORIGINS_JSON='[]'
 SESSION_COOKIE_SECURE_JSON="false"
 
-## Django path settings ---------------------------------------------
+## Django path/other settings ---------------------------------------
 STATIC_URL="/static/"
 STATIC_ROOT="../static_root"
 SERVER_EMAIL="donotreply@example.org"
