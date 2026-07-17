@@ -1,5 +1,6 @@
 import base64
 import json
+import pathlib
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
@@ -135,6 +136,26 @@ class ViewTests(SimpleTestCase):
         self.assertEqual(['orphan-1'], response.json()['data'])
         self.assertEqual(['orphan-1'], self.client.session['ids_to_delete'])
         mock_prep.assert_called_once_with()
+
+    @override_settings(
+        WEBSERVED_DATA_DIR_PATH=pathlib.Path('/private/deployment/usep-data'),
+        SOLR_URL='https://internal-solr.example.org/solr/private-core',
+    )
+    @patch('usep_indexer_app.views.orphans.prep_orphan_list', return_value=['orphan-1'])
+    def test_list_orphans_omits_infrastructure_details(self, mock_prep) -> None:
+        """
+        Checks that HTML and JSON responses do not disclose configured locations.
+        """
+        json_response = self.client.get('/list_orphans/?format=json', **self.auth_header)
+        json_data = json_response.json()
+        self.assertNotIn('inscriptions_dir_path', json_data)
+        self.assertNotIn('solr_url', json_data)
+
+        html_response = self.client.get('/list_orphans/', **self.auth_header)
+        self.assertNotContains(html_response, '/private/deployment/usep-data')
+        self.assertNotContains(html_response, 'internal-solr.example.org')
+        self.assertContains(html_response, 'configured Solr index')
+        self.assertEqual(2, mock_prep.call_count)
 
     @patch('usep_indexer_app.views.orphans.run_deletes', return_value=[])
     def test_orphan_handler_deletes_ids_from_session(self, mock_run_deletes) -> None:

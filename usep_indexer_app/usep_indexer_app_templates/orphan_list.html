@@ -6,7 +6,7 @@
     </head>
     <body>
         {% if data %}
-            <p>Comparing inscription IDs in “{{ inscriptions_dir_path }}” with Solr at “{{ solr_url }}” yielded these orphans:</p>
+            <p>Comparing the web-served inscription files with the configured Solr index yielded these orphans:</p>
             <ul>
                 {% for inscription_id in data %}<li>{{ inscription_id }}</li>{% endfor %}
             </ul>
@@ -18,7 +18,7 @@
                 <button type="submit" value="No" name="action_button">No</button>
             </form>
         {% else %}
-            <p>No orphans to delete from comparing inscription IDs in “{{ inscriptions_dir_path }}” with Solr at “{{ solr_url }}”.</p>
+            <p>No orphans found when comparing the web-served inscription files with the configured Solr index.</p>
         {% endif %}
     </body>
 </html>

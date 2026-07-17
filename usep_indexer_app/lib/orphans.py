@@ -61,15 +61,13 @@ def prep_context(
     start_time: datetime.datetime,
 ) -> dict[str, object]:
     """
-    Builds the HTML and JSON response context for orphan listing.
+    Builds the orphan-list response context without infrastructure locations.
 
     Called by: views.list_orphans()
     """
     context: dict[str, object] = {
         'data': orphan_ids,
-        'inscriptions_dir_path': str(settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions'),
         'orphan_handler_url': orphan_handler_url,
-        'solr_url': settings.SOLR_URL,
         'time_taken': str(datetime.datetime.now() - start_time),
     }
     return context
