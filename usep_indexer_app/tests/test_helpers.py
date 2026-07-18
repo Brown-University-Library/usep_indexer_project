@@ -9,12 +9,12 @@ from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, proce
 
 class HelperTests(SimpleTestCase):
     """
-    Checks migrated pure helper behavior.
+    Checks pure helper behavior.
     """
 
     def test_malformed_payload_keeps_legacy_empty_lists(self) -> None:
         """
-        Checks that malformed JSON does not prevent the legacy acknowledgement.
+        Checks that malformed JSON produces empty changed-file lists.
         """
         files = payloads.prepare_files_to_process(b'{bad json')
         self.assertEqual([], files['files_updated'])
@@ -22,7 +22,7 @@ class HelperTests(SimpleTestCase):
 
     def test_xinclude_rewrite_updates_only_known_resource_urls(self) -> None:
         """
-        Checks all three legacy XInclude replacements.
+        Checks all three known XInclude replacements.
         """
         original = ' '.join(processor.XINCLUDE_REPLACEMENTS)
         updated = processor.rewrite_xinclude_text(original)
@@ -212,7 +212,7 @@ class HelperTests(SimpleTestCase):
         mock_update_index,
     ) -> None:
         """
-        Checks that incremental processing performs every stage without queue fan-out.
+        Checks that incremental processing performs every required stage directly.
         """
         processor.process_incremental(['updated.xml'], ['removed.xml'])
 
@@ -286,7 +286,7 @@ class HelperTests(SimpleTestCase):
 
     def test_version_response_uses_git_head(self) -> None:
         """
-        Checks the template version helper in the migrated project.
+        Checks that the version endpoint reads branch and commit data from Git metadata.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             base_dir = pathlib.Path(temporary_directory)

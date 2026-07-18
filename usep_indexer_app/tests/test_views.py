@@ -8,7 +8,7 @@ from django.test import SimpleTestCase, override_settings
 
 class ViewTests(SimpleTestCase):
     """
-    Checks the migrated HTTP contract.
+    Checks HTTP endpoint behavior.
     """
 
     def setUp(self) -> None:
@@ -20,7 +20,7 @@ class ViewTests(SimpleTestCase):
 
     def test_protected_endpoint_rejects_missing_credentials(self) -> None:
         """
-        Checks that the webhook endpoint retains HTTP Basic Auth.
+        Checks that the webhook endpoint requires HTTP Basic Auth.
         """
         with self.assertLogs('usep_indexer_app.lib.auth', level='INFO') as captured_logs:
             response = self.client.get('/')
@@ -81,7 +81,7 @@ class ViewTests(SimpleTestCase):
     @patch('usep_indexer_app.views.spool.write_event')
     def test_root_get_does_not_write_event_without_a_body(self, mock_write_event) -> None:
         """
-        Checks the legacy root GET response without triggering work.
+        Checks that a root GET without a request body does not trigger work.
         """
         response = self.client.get('/', **self.auth_header)
         self.assertEqual(200, response.status_code)
@@ -91,7 +91,7 @@ class ViewTests(SimpleTestCase):
     @patch('usep_indexer_app.views.spool.write_event')
     def test_force_get_writes_empty_file_lists(self, mock_write_event) -> None:
         """
-        Checks the legacy force endpoint's no-body behavior.
+        Checks that a force GET without a request body queues empty file lists.
         """
         response = self.client.get('/force/', **self.auth_header)
         self.assertEqual(200, response.status_code)
@@ -101,7 +101,7 @@ class ViewTests(SimpleTestCase):
     @patch('usep_indexer_app.views.spool.write_event')
     def test_reindex_all_writes_full_workflow_event(self, mock_write_event) -> None:
         """
-        Checks that the admin reindex endpoint remains asynchronous.
+        Checks that the admin reindex endpoint queues a full-workflow event.
         """
         response = self.client.get('/reindex_all/', **self.auth_header)
         self.assertEqual(200, response.status_code)
@@ -161,7 +161,7 @@ class ViewTests(SimpleTestCase):
     @patch('usep_indexer_app.views.orphans.run_deletes', return_value=[])
     def test_orphan_handler_deletes_ids_from_session(self, mock_run_deletes) -> None:
         """
-        Checks the legacy GET confirmation endpoint.
+        Checks that the GET confirmation endpoint deletes IDs stored in the session.
         """
         with patch('usep_indexer_app.views.orphans.prep_orphan_list', return_value=['orphan-1']):
             self.client.get('/list_orphans/?format=json', **self.auth_header)
