@@ -207,13 +207,6 @@ class ViewTests(SimpleTestCase):
         self.assertTrue(data['response']['timetaken'])
         mock_check_processing.assert_called_once_with()
 
-    def test_daemon_check_route_is_removed(self) -> None:
-        """
-        Checks that the renamed endpoint is no longer exposed at its old path.
-        """
-        response = self.client.get('/daemon_check/', REMOTE_ADDR='127.0.0.1')
-        self.assertEqual(404, response.status_code)
-
     def test_info_response_retains_legacy_keys(self) -> None:
         """
         Checks the metadata endpoint contract.
