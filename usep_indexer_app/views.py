@@ -8,9 +8,9 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
+
 from usep_indexer_app.lib import orphans, payloads, processing_check_helper, spool, version_helper
 from usep_indexer_app.lib.auth import basic_auth_required
-
 
 log = logging.getLogger(__name__)
 
@@ -160,10 +160,11 @@ def error_check(request: HttpRequest) -> HttpResponse:
     return HttpResponseNotFound('<div>404 / Not Found</div>')
 
 
-@require_GET
+@require_http_methods(['GET', 'HEAD'])
 def version(request: HttpRequest) -> HttpResponse:
     """
     Returns branch and commit data.
+    Adding `HEAD` to permitted methods for our code-update-script check.
 
     Called by: config.urls.urlpatterns
     """
