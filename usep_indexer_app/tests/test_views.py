@@ -170,27 +170,49 @@ class ViewTests(SimpleTestCase):
         self.assertEqual(b'all orphans deleted', response.content)
         mock_run_deletes.assert_called_once_with(['orphan-1'])
 
-    def test_daemon_check_hides_endpoint_from_unapproved_ip(self) -> None:
+    def test_processing_check_hides_endpoint_from_unapproved_ip(self) -> None:
         """
-        Checks the daemon endpoint's source-IP restriction.
+        Checks the processing endpoint's source-IP restriction.
         """
-        response = self.client.get('/daemon_check/', REMOTE_ADDR='192.0.2.1')
+        response = self.client.get('/processing_check/', REMOTE_ADDR='192.0.2.1')
         self.assertEqual(404, response.status_code)
 
-    @patch(
-        'usep_indexer_app.views.daemon.check_daemon',
-        return_value={'result': 'daemon_active', 'pending_count': 2, 'processor_status': 'success'},
+    @override_settings(
+        ALLOWED_HOSTS=['status.example.org'],
+        README_URL='https://example.org/usep-indexer-readme',
     )
-    def test_daemon_check_reports_processor_status(self, mock_check_daemon) -> None:
+    @patch(
+        'usep_indexer_app.views.processing_check_helper.check_processing',
+        return_value={'result': 'processing_active', 'pending_count': 2, 'processor_status': 'success'},
+    )
+    def test_processing_check_reports_nested_context(self, mock_check_processing) -> None:
         """
-        Checks the daemon endpoint's established result and new backlog values.
+        Checks processor health and request metadata use the version-style response shape.
+        """
+        response = self.client.get(
+            '/processing_check/',
+            REMOTE_ADDR='127.0.0.1',
+            HTTP_HOST='status.example.org',
+        )
+        data = response.json()
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual({'timestamp', 'url'}, set(data['request']))
+        self.assertEqual('http://status.example.org/processing_check/', data['request']['url'])
+        self.assertTrue(data['request']['timestamp'])
+        self.assertEqual('processing_active', data['response']['result'])
+        self.assertEqual(2, data['response']['pending_count'])
+        self.assertEqual('success', data['response']['processor_status'])
+        self.assertEqual('https://example.org/usep-indexer-readme', data['response']['info'])
+        self.assertTrue(data['response']['timetaken'])
+        mock_check_processing.assert_called_once_with()
+
+    def test_daemon_check_route_is_removed(self) -> None:
+        """
+        Checks that the renamed endpoint is no longer exposed at its old path.
         """
         response = self.client.get('/daemon_check/', REMOTE_ADDR='127.0.0.1')
-        self.assertEqual(200, response.status_code)
-        self.assertEqual('daemon_active', response.json()['result'])
-        self.assertEqual(2, response.json()['pending_count'])
-        self.assertEqual('success', response.json()['processor_status'])
-        mock_check_daemon.assert_called_once_with()
+        self.assertEqual(404, response.status_code)
 
     def test_info_response_retains_legacy_keys(self) -> None:
         """

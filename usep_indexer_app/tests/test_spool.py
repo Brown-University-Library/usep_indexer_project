@@ -260,7 +260,7 @@ class SpoolTests(SimpleTestCase):
 
     def test_processor_health_distinguishes_fresh_and_stale_status(self) -> None:
         """
-        Checks legacy health values and filesystem-queue backlog fields.
+        Checks processing-health values and filesystem-queue backlog fields.
         """
         current_time = datetime.datetime(2026, 7, 10, 12, 0, tzinfo=datetime.UTC)
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -283,9 +283,9 @@ class SpoolTests(SimpleTestCase):
                 current_time,
             )
 
-        self.assertEqual('daemon_active', fresh_health['result'])
+        self.assertEqual('processing_active', fresh_health['result'])
         self.assertEqual(1, fresh_health['pending_count'])
-        self.assertEqual('daemon_not_active', stale_health['result'])
+        self.assertEqual('processing_not_active', stale_health['result'])
 
     def test_management_command_processes_configured_spool(self) -> None:
         """

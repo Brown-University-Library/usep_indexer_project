@@ -627,7 +627,7 @@ def get_processor_health(
     """
     Reports recent processor status and filesystem-queue backlog counts.
 
-    Called by: daemon.check_daemon()
+    Called by: processing_check_helper.check_processing()
     """
     comparison_time = current_time or utc_now()
     status_path = spool_root / 'processor-status.json'
@@ -655,7 +655,7 @@ def get_processor_health(
             processor_status = 'invalid'
 
     health: dict[str, object] = {
-        'result': 'daemon_active' if is_fresh_success else 'daemon_not_active',
+        'result': 'processing_active' if is_fresh_success else 'processing_not_active',
         'processor_status': processor_status,
         'last_started_at': started_at,
         'last_finished_at': finished_at,

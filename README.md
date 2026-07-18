@@ -164,12 +164,26 @@ The production processor is intended to run every other minute. The command take
 | `/reindex_all/` | GET | Basic Auth | Enqueue full pull, copy, and reindex |
 | `/list_orphans/` | GET | Basic Auth | Compare filesystem and Solr IDs, identify the index as dev/prod without exposing configured locations; add `?format=json` for JSON |
 | `/orphan_handler/` | GET | Basic Auth | Confirm or cancel orphan deletion |
-| `/daemon_check/` | GET | Source-IP allowlist | Report processor freshness and queue backlog |
+| `/processing_check/` | GET | Source-IP allowlist | Report processor freshness and queue backlog |
 | `/info/` | GET | Public | Service metadata |
 | `/version/` | GET | Public | Git branch and commit metadata |
 | `/error_check/` | GET | Public | Raise in debug mode; return 404 otherwise |
 
 GET support and the query-driven orphan deletion flow are retained for initial compatibility. They should be tightened in a later API revision.
+
+### Processing-check response
+
+The `/processing_check/` response contains:
+
+- `request.timestamp`: local timestamp at which the application began handling the request.
+- `request.url`: full URL used to request the endpoint.
+- `response.result`: `processing_active` when the latest `running` or `success` status is fresh; otherwise `processing_not_active`.
+- `response.processor_status`: latest recorded processor-run status, such as `running`, `success`, or `failed`.
+- `response.last_started_at` and `response.last_finished_at`: UTC timestamps recorded for the latest processor run.
+- `response.pending_count`, `response.processing_count`, `response.failed_count`, and `response.quarantine_count`: current event-file counts in those queue directories; these are snapshots, not cumulative totals.
+- `response.oldest_pending_age_seconds`: age of the oldest pending event, or `null` when no event is pending.
+- `response.info`: URL of this README.
+- `response.timetaken`: time spent assembling the endpoint response.
 
 ## Local HTTP listener check
 

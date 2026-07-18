@@ -8,7 +8,7 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
-from usep_indexer_app.lib import daemon, orphans, payloads, spool, version_helper
+from usep_indexer_app.lib import orphans, payloads, processing_check_helper, spool, version_helper
 from usep_indexer_app.lib.auth import basic_auth_required
 
 
@@ -16,23 +16,20 @@ log = logging.getLogger(__name__)
 
 
 @require_GET
-def daemon_check(request: HttpRequest) -> JsonResponse:
+def processing_check(request: HttpRequest) -> JsonResponse:
     """
     Reports filesystem-queue processor freshness and backlog state.
 
     Called by: config.urls.urlpatterns
     """
+    request_started = datetime.datetime.now()
     request_ip = request.META.get('REMOTE_ADDR', 'ip_not_available')
-    if not daemon.validate_request_source(request_ip):
+    if not processing_check_helper.validate_request_source(request_ip):
         return JsonResponse({'detail': '404 / Not Found'}, status=404)
 
-    health = daemon.check_daemon()
-    context = {
-        'datetime': str(datetime.datetime.now()),
-        'request': 'daemon_check',
-        **health,
-    }
-    return JsonResponse(context, json_dumps_params={'indent': 2})
+    health = processing_check_helper.check_processing()
+    context = processing_check_helper.make_context(request, request_started, health)
+    return JsonResponse(context, json_dumps_params={'indent': 2, 'sort_keys': True})
 
 
 @require_GET
@@ -132,8 +129,7 @@ def handle_github_push(request: HttpRequest) -> HttpResponse:
     if request.body or request.path.rstrip('/').endswith('/force'):
         files_to_process = payloads.prepare_files_to_process(request.body)
         log.debug(
-            f'files_updated, ``{files_to_process["files_updated"]}``; '
-            f'files_removed, ``{files_to_process["files_removed"]}``'
+            f'files_updated, ``{files_to_process["files_updated"]}``; files_removed, ``{files_to_process["files_removed"]}``'
         )
         try:
             spool.write_event(

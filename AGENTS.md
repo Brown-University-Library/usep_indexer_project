@@ -168,7 +168,7 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 | URL, HTTP method, response, or protection | `config/urls.py`, `usep_indexer_app/views.py` | `lib/auth.py`, then the concern-specific module |
 | Basic Auth | `usep_indexer_app/lib/auth.py` | `config/settings.py` for setting names |
 | GitHub payload parsing | `usep_indexer_app/lib/payloads.py` | `views.handle_github_push()` and the sanitized test fixture |
-| Durable queue schema and lifecycle | `usep_indexer_app/lib/spool.py` | `management/commands/process_spool.py`, `lib/daemon.py` |
+| Durable queue schema and lifecycle | `usep_indexer_app/lib/spool.py` | `management/commands/process_spool.py`, `lib/processing_check_helper.py` |
 | Git pull, `rsync`, and XInclude rewriting | `usep_indexer_app/lib/processor.py` | `lib/reindex.py` for the full workflow |
 | Main XML-to-Solr transformation | `usep_indexer_app/lib/indexer.py` | runtime XSL configured by `SOLR_XSL_PATH`; source copy is normally under `../usep-data/resources/xsl/` |
 | Solr HTTP requests | `usep_indexer_app/lib/solr_client.py` | callers in `indexer.py`, `bibliography.py`, `transcription.py`, and `orphans.py` |
@@ -176,7 +176,7 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 | Searchable transcription | `usep_indexer_app/lib/transcription.py` | runtime XSL configured by `TRANSCRIPTION_PARSER_XSL_PATH` |
 | Full rebuild and stale-ID removal | `usep_indexer_app/lib/reindex.py` | `processor.py`, `indexer.py`, `orphans.py` |
 | Manual orphan listing/deletion | `usep_indexer_app/lib/orphans.py`, `views.py` | `usep_indexer_app_templates/orphan_list.html` |
-| Processor health | `usep_indexer_app/lib/daemon.py` | `spool.get_processor_health()` |
+| Processor health | `usep_indexer_app/lib/processing_check_helper.py` | `spool.get_processor_health()` |
 | Public version metadata | `usep_indexer_app/lib/version_helper.py` | `.git/HEAD` and Django cache behavior |
 | Tests and supported test entry point | `run_tests.py` | `usep_indexer_app/tests/` |
 | Integrated local listener check | `check_web_listener.py` | `tests/test_check_web_listener.py` |
@@ -200,7 +200,7 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 - Files already under `processing/` are replayed before new pending files after a crash. Processing must therefore be safe to repeat.
 - Completed retention is based on completion-time file modification time, not original receipt time.
 - A busy lock returns status `locked` without claiming work. The management command only raises `CommandError` for status `failed`.
-- Health is based on whether the last `running`/`success` timestamp is fresh enough. Backlog counts are reported, but a backlog by itself does not change `daemon_active` to `daemon_not_active`.
+- Health is based on whether the last `running`/`success` timestamp is fresh enough. Backlog counts are reported, but a backlog by itself does not change `processing_active` to `processing_not_active`.
 - Queue correctness assumes a durable local POSIX filesystem with atomic rename, directory synchronization, and `flock`; do not move it to an arbitrary network/object filesystem without revisiting those assumptions.
 
 ### Source data and generated data
@@ -219,7 +219,7 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 - Malformed GitHub JSON is intentionally acknowledged and queued as an incremental event with empty path lists. An empty-body request to `/` queues nothing, while `/force/` queues even without a body.
 - The listener validates Basic Auth but does not validate a GitHub HMAC signature. Its security depends on strong credentials and deployment behind HTTPS. Preserve compatibility unless a task explicitly changes this contract.
 - `/reindex_all/` and orphan deletion are state-changing GET flows retained for legacy compatibility. Orphan deletion relies on the preceding `/list_orphans/` response putting all candidate IDs into a signed browser cookie.
-- `/daemon_check/` compares `REMOTE_ADDR` directly with `LEGIT_IPS`; it is not proxy-header aware. `/info/`, `/version/`, and production `/error_check/` are public.
+- `/processing_check/` compares `REMOTE_ADDR` directly with `LEGIT_IPS`; it is not proxy-header aware. `/info/`, `/version/`, and production `/error_check/` are public.
 - `/list_orphans/` deliberately omits configured filesystem and Solr locations from its HTML/JSON context. It exposes only a safe index label: Solr hostnames beginning with `d` display as dev, those beginning with `p` display as prod, and other hostnames use a neutral label. Preserve that information-disclosure boundary when changing the response context or template.
 - The main settings module asserts that `../.env` exists during import and loads it with `override=True`. JSON-suffixed values must be valid JSON, required email/log/cache values must exist even when not central to a command, and the log directory must already exist. Prefer absolute configured paths because unresolved relative paths depend on the process working directory.
 - `USE_TZ` is false for Django-facing times, while spool document timestamps are timezone-aware UTC and queue filenames are rendered in `settings.TIME_ZONE`.
