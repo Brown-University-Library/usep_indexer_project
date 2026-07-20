@@ -85,6 +85,33 @@ class HelperTests(SimpleTestCase):
             solr_document = indexer.build_solr_document(inscription_path, xsl_path)
         self.assertIn('<field name="id">one</field>', solr_document)
 
+    @patch('usep_indexer_app.lib.indexer.transcription.add_transcription')
+    @patch('usep_indexer_app.lib.indexer.bibliography.add_bibliography')
+    @patch('usep_indexer_app.lib.indexer.solr_client.post_xml_update')
+    @patch('usep_indexer_app.lib.indexer.build_solr_document', return_value='<add/>')
+    def test_strict_indexing_propagates_enrichment_failures(
+        self,
+        mock_build_solr_document,
+        mock_post_xml_update,
+        mock_add_bibliography,
+        mock_add_transcription,
+    ) -> None:
+        """
+        Checks strict indexing fails for either bibliography or transcription errors.
+        """
+        mock_add_bibliography.side_effect = RuntimeError('Bibliography failed')
+        with self.assertRaisesRegex(RuntimeError, 'Bibliography failed'):
+            indexer.update_index_entry('one.xml', strict_enrichment=True)
+        mock_add_transcription.assert_not_called()
+
+        mock_add_bibliography.side_effect = None
+        mock_add_transcription.side_effect = RuntimeError('Transcription failed')
+        with self.assertRaisesRegex(RuntimeError, 'Transcription failed'):
+            indexer.update_index_entry('one.xml', strict_enrichment=True)
+
+        self.assertEqual(2, mock_build_solr_document.call_count)
+        self.assertEqual(2, mock_post_xml_update.call_count)
+
     @patch('usep_indexer_app.lib.indexer.build_solr_document', return_value='<add/>')
     @patch('usep_indexer_app.lib.indexer.solr_client.post_xml_update', side_effect=RuntimeError('Solr down'))
     def test_solr_post_failure_logs_source_file(self, mock_post_xml_update, mock_build_solr_document) -> None:
@@ -169,6 +196,18 @@ class HelperTests(SimpleTestCase):
         """
         result = reindex.build_orphaned_ids(['/data/one.xml', '/data/two.xml'], ['one', 'old'])
         self.assertEqual(['old'], result)
+
+    def test_single_reindex_filename_accepts_existing_id_characters_and_rejects_paths(self) -> None:
+        """
+        Checks single-reindex ID validation permits spaces and plus signs without accepting paths.
+        """
+        inscription_id = 'KY.Lou.SAM.L.1929.17.440A+B'
+        self.assertEqual(f'{inscription_id}.xml', reindex.build_inscription_filename(inscription_id))
+        invalid_ids = ['', '../one', 'directory/one', 'directory\\one', 'one.xml', ' one']
+        for invalid_id in invalid_ids:
+            with self.subTest(invalid_id=invalid_id):
+                with self.assertRaises(ValueError):
+                    reindex.build_inscription_filename(invalid_id)
 
     @patch('usep_indexer_app.lib.orphans.solr_client.delete_id')
     def test_orphan_deletion_continues_after_one_failure(self, mock_delete_id) -> None:
@@ -356,6 +395,75 @@ class HelperTests(SimpleTestCase):
         mock_update_xinclude.assert_called_once_with(copied_inscriptions_path)
         mock_get_ids.assert_called_once()
         mock_update_all_index_entries.assert_called_once_with([str(copied_xml_path)], [])
+
+    @patch('usep_indexer_app.lib.reindex.indexer.update_index_entry')
+    @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references', return_value=2)
+    @patch('usep_indexer_app.lib.reindex.processor.copy_files')
+    @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
+    def test_single_reindex_refreshes_data_and_uses_strict_indexing(
+        self,
+        mock_git_pull,
+        mock_copy_files,
+        mock_update_xinclude,
+        mock_update_index_entry,
+    ) -> None:
+        """
+        Checks one-inscription reindexing pulls, copies, normalizes, and strictly updates Solr.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = pathlib.Path(temporary_directory)
+            usep_data_path = base_path / 'usep-data'
+            temporary_inscriptions_path = base_path / 'temporary-inscriptions'
+            webserved_data_path = base_path / 'webserved-data'
+            copied_inscriptions_path = webserved_data_path / 'inscriptions'
+            copied_inscriptions_path.mkdir(parents=True)
+            copied_xml_path = copied_inscriptions_path / 'one.xml'
+            copied_xml_path.write_bytes(b'<root />')
+
+            with override_settings(
+                USEP_DATA_GIT_CLONED_DIR_PATH=usep_data_path,
+                TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH=temporary_inscriptions_path,
+                WEBSERVED_DATA_DIR_PATH=webserved_data_path,
+            ):
+                result = reindex.process_single_reindex('one')
+
+        self.assertEqual(copied_xml_path, result)
+        mock_git_pull.assert_called_once_with(usep_data_path)
+        mock_copy_files.assert_called_once_with(usep_data_path, temporary_inscriptions_path, webserved_data_path)
+        mock_update_xinclude.assert_called_once_with(copied_inscriptions_path)
+        mock_update_index_entry.assert_called_once_with('one.xml', strict_enrichment=True)
+
+    @patch('usep_indexer_app.lib.reindex.indexer.update_index_entry')
+    @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references', return_value=0)
+    @patch('usep_indexer_app.lib.reindex.processor.copy_files')
+    @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
+    def test_single_reindex_fails_when_copied_inscription_is_missing(
+        self,
+        mock_git_pull,
+        mock_copy_files,
+        mock_update_xinclude,
+        mock_update_index_entry,
+    ) -> None:
+        """
+        Checks a missing requested inscription fails after the source-data refresh.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = pathlib.Path(temporary_directory)
+            usep_data_path = base_path / 'usep-data'
+            temporary_inscriptions_path = base_path / 'temporary-inscriptions'
+            webserved_data_path = base_path / 'webserved-data'
+            with override_settings(
+                USEP_DATA_GIT_CLONED_DIR_PATH=usep_data_path,
+                TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH=temporary_inscriptions_path,
+                WEBSERVED_DATA_DIR_PATH=webserved_data_path,
+            ):
+                with self.assertRaisesRegex(FileNotFoundError, "ID 'missing'"):
+                    reindex.process_single_reindex('missing')
+
+        mock_git_pull.assert_called_once_with(usep_data_path)
+        mock_copy_files.assert_called_once_with(usep_data_path, temporary_inscriptions_path, webserved_data_path)
+        mock_update_xinclude.assert_called_once_with(webserved_data_path / 'inscriptions')
+        mock_update_index_entry.assert_not_called()
 
     def test_version_response_uses_git_head(self) -> None:
         """

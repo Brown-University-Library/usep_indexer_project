@@ -190,6 +190,18 @@ Usage:
 uv run ./manage.py process_spool
 ```
 
+### `reindex_inscription`
+
+Immediately pulls the configured `usep-data` clone, rebuilds the copied data, and reindexes one inscription. The argument is the inscription ID without the `.xml` extension. The command uses the same non-overlapping lock as `process_spool`, so it exits with an error if another processor is active.
+
+Unlike ordinary queued processing, this command treats bibliography and transcription enrichment failures as command failures.
+
+Usage:
+
+```bash
+uv run ./manage.py reindex_inscription KY.Lou.SAM.L.1929.17.567A-D
+```
+
 ### `validate_xml`
 
 Checks whether one local or remote XML document is well-formed without changing data.
