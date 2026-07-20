@@ -4,7 +4,7 @@ import tempfile
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
-from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, processor, reindex, transcription
+from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, processor, reindex, transcription, xml_validation
 
 
 class HelperTests(SimpleTestCase):
@@ -283,6 +283,79 @@ class HelperTests(SimpleTestCase):
 
         mock_remove_entry.assert_called_once_with('old')
         self.assertEqual([('/data/one.xml',), ('/data/two.xml',)], [call.args for call in mock_update_entry.call_args_list])
+
+    @patch('usep_indexer_app.lib.reindex.update_all_index_entries')
+    @patch('usep_indexer_app.lib.reindex.solr_client.get_ids')
+    @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references')
+    @patch('usep_indexer_app.lib.reindex.processor.copy_files')
+    @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
+    def test_full_reindex_validates_corpus_before_copying_or_contacting_solr(
+        self,
+        mock_git_pull,
+        mock_copy_files,
+        mock_update_xinclude,
+        mock_get_ids,
+        mock_update_all_index_entries,
+    ) -> None:
+        """
+        Checks malformed source XML stops the workflow before copying or contacting Solr.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            usep_data_path = pathlib.Path(temporary_directory) / 'usep-data'
+            inscriptions_path = usep_data_path / 'xml_inscriptions' / 'transcribed'
+            inscriptions_path.mkdir(parents=True)
+            (inscriptions_path / 'broken.xml').write_bytes(b'<root><child></root>')
+
+            with override_settings(USEP_DATA_GIT_CLONED_DIR_PATH=usep_data_path):
+                with self.assertRaisesRegex(xml_validation.XMLNotWellFormedError, 'transcribed/broken.xml'):
+                    reindex.process_full_reindex()
+
+        mock_git_pull.assert_called_once_with(usep_data_path)
+        mock_copy_files.assert_not_called()
+        mock_update_xinclude.assert_not_called()
+        mock_get_ids.assert_not_called()
+        mock_update_all_index_entries.assert_not_called()
+
+    @patch('usep_indexer_app.lib.reindex.update_all_index_entries')
+    @patch('usep_indexer_app.lib.reindex.solr_client.get_ids', return_value=[])
+    @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references', return_value=0)
+    @patch('usep_indexer_app.lib.reindex.processor.copy_files')
+    @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
+    def test_full_reindex_continues_after_successful_corpus_validation(
+        self,
+        mock_git_pull,
+        mock_copy_files,
+        mock_update_xinclude,
+        mock_get_ids,
+        mock_update_all_index_entries,
+    ) -> None:
+        """
+        Checks a well-formed source corpus reaches the Solr reconciliation stage.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = pathlib.Path(temporary_directory)
+            usep_data_path = base_path / 'usep-data'
+            source_inscriptions_path = usep_data_path / 'xml_inscriptions' / 'transcribed'
+            source_inscriptions_path.mkdir(parents=True)
+            (source_inscriptions_path / 'one.xml').write_bytes(b'<root />')
+            webserved_data_path = base_path / 'webserved-data'
+            copied_inscriptions_path = webserved_data_path / 'inscriptions'
+            copied_inscriptions_path.mkdir(parents=True)
+            copied_xml_path = copied_inscriptions_path / 'one.xml'
+            copied_xml_path.write_bytes(b'<root />')
+
+            with override_settings(
+                USEP_DATA_GIT_CLONED_DIR_PATH=usep_data_path,
+                TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH=base_path / 'temporary-inscriptions',
+                WEBSERVED_DATA_DIR_PATH=webserved_data_path,
+            ):
+                reindex.process_full_reindex()
+
+        mock_git_pull.assert_called_once_with(usep_data_path)
+        mock_copy_files.assert_called_once()
+        mock_update_xinclude.assert_called_once_with(copied_inscriptions_path)
+        mock_get_ids.assert_called_once()
+        mock_update_all_index_entries.assert_called_once_with([str(copied_xml_path)], [])
 
     def test_version_response_uses_git_head(self) -> None:
         """

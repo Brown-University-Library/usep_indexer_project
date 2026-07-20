@@ -94,7 +94,7 @@ def validate_xml_directory(directory_path: Path) -> XMLDirectoryValidationResult
     """
     Validates every XML file below a directory and collects all failures.
 
-    Called by: management.commands.validate_all_xml.Command.handle()
+    Called by: management.commands.validate_all_xml.Command.handle(), reindex.validate_inscription_corpus()
     """
     if not directory_path.is_dir():
         raise XMLSourceError(f'Directory does not exist: {directory_path}')
