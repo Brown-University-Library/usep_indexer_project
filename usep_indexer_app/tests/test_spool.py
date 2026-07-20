@@ -6,7 +6,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from django.core import mail
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
 from usep_indexer_app.lib import spool
 
@@ -289,7 +291,7 @@ class SpoolTests(SimpleTestCase):
 
     def test_management_command_processes_configured_spool(self) -> None:
         """
-        Checks that the cron-facing command runs and emits structured output.
+        Checks that a successful cron-facing command emits output without email.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             output = io.StringIO()
@@ -299,6 +301,53 @@ class SpoolTests(SimpleTestCase):
         result = json.loads(output.getvalue())
         self.assertEqual('success', result['status'])
         self.assertEqual(0, result['claimed'])
+        self.assertEqual([], mail.outbox)
+
+    @override_settings(ADMINS=[('Test Admin', 'admin@example.org')])
+    @patch(
+        'usep_indexer_app.management.commands.process_spool.spool.process_spool',
+        return_value=spool.ProcessResult(status='failed', claimed=1, retried=1, error='XMLSyntaxError: malformed XML'),
+    )
+    def test_management_command_emails_admins_once_on_job_failure(self, mock_process) -> None:
+        """
+        Checks that one failed job sends one summary email before raising.
+        """
+        with self.assertRaises(CommandError):
+            call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+
+        self.assertEqual(1, len(mail.outbox))
+        self.assertIn('USEP spool-processing job failed', mail.outbox[0].subject)
+        self.assertIn('"status": "failed"', mail.outbox[0].body)
+        self.assertIn('XMLSyntaxError: malformed XML', mail.outbox[0].body)
+        mock_process.assert_called_once()
+
+    @patch(
+        'usep_indexer_app.management.commands.process_spool.mail_admins',
+        side_effect=RuntimeError('mail server unavailable'),
+    )
+    @patch(
+        'usep_indexer_app.management.commands.process_spool.spool.process_spool',
+        return_value=spool.ProcessResult(status='failed', claimed=1, retried=1, error='XMLSyntaxError: malformed XML'),
+    )
+    def test_email_delivery_failure_does_not_hide_job_failure(self, mock_process, mock_mail_admins) -> None:
+        """
+        Checks that an email-backend error is logged before the failed command raises.
+        """
+        with self.assertLogs('usep_indexer_app.management.commands.process_spool', level='ERROR') as captured_logs:
+            with self.assertRaises(CommandError):
+                call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+
+        self.assertIn('Unable to email Django admins', '\n'.join(captured_logs.output))
+        mock_process.assert_called_once()
+        mock_mail_admins.assert_called_once_with(
+            'USEP spool-processing job failed',
+            (
+                'The USEP spool-processing job failed.\n\nProcessor result:\n'
+                '{"claimed": 1, "cleaned": 0, "error": "XMLSyntaxError: malformed XML", "failed": 0, '
+                '"processed": 0, "quarantined": 0, "retried": 1, "status": "failed"}'
+            ),
+            fail_silently=False,
+        )
 
     def build_test_event(
         self,

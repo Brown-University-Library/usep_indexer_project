@@ -1,9 +1,29 @@
 import dataclasses
 import json
+import logging
 
 from django.conf import settings
+from django.core.mail import mail_admins
 from django.core.management.base import BaseCommand, CommandError
 from usep_indexer_app.lib import spool
+
+
+log = logging.getLogger(__name__)
+JOB_FAILURE_EMAIL_SUBJECT = 'USEP spool-processing job failed'
+
+
+def email_job_failure(output: str) -> None:
+    """
+    Emails the configured Django admins once for a failed processor job.
+
+    Called by: Command.handle()
+    """
+    message = f'The USEP spool-processing job failed.\n\nProcessor result:\n{output}'
+    try:
+        mail_admins(JOB_FAILURE_EMAIL_SUBJECT, message, fail_silently=False)
+    except Exception:
+        log.exception('Unable to email Django admins about the failed spool-processing job.')
+    return
 
 
 class Command(BaseCommand):
@@ -30,6 +50,7 @@ class Command(BaseCommand):
         )
         output = json.dumps(dataclasses.asdict(result), sort_keys=True)
         if result.status == 'failed':
+            email_job_failure(output)
             raise CommandError(output)
         self.stdout.write(output)
         return

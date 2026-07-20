@@ -48,7 +48,7 @@ For each inscription being indexed, the normal Solr workflow makes six sequentia
 5. Post an atomic update containing the searchable transcription.
 6. Request another soft commit.
 
-Each request must finish before the next begins, so the indexer does not send concurrent updates. Deletions are also performed sequentially and each deletion request includes a hard commit. Bibliography and transcription enrichment are best-effort: an error in either is logged without stopping the main inscription update, whereas a failed main update or deletion fails the queued batch so it can be retried.
+Each request must finish before the next begins, so the indexer does not send concurrent updates. Deletions are also performed sequentially and each deletion request includes a hard commit. Bibliography and transcription enrichment are best-effort: an error in either is logged without stopping the main inscription update, whereas a failed main update or deletion fails the queued batch so it can be retried. At the end of a failed processor job, the management command sends one summary email to the addresses in Django's `ADMINS` setting before exiting with an error. It does not send email for each individual inscription error.
 
 
 ## Requirements
@@ -134,7 +134,7 @@ Update the outer `.env` using `config/dotenv_example_file.txt` as the checklist.
 - Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by the user running the `./manage.py` process-command, described below.
 - Keep `SPOOL_ROOT_PATH` on durable, non-ephemeral local storage that supports atomic rename and `flock`. The application creates the queue's lifecycle subdirectories automatically.
 - Set `SOLR_URL`, `SOLR_XSL_PATH`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the appropriate local values.
-- Review the file-based cache, static-file, email, queue-retention, and queue-health settings. The email server is only used for admin error notifications, but its settings are required when Django loads.
+- Review the file-based cache, static-file, email, queue-retention, and queue-health settings. The email server sends admin notifications for web-request exceptions and failed processor jobs; its settings are required when Django loads.
 
 The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.
 
