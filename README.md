@@ -206,6 +206,16 @@ Usage with an HTTP(S) URL:
 uv run ./manage.py validate_xml https://raw.githubusercontent.com/Brown-University-Library/usep-data/refs/heads/master/xml_inscriptions/transcribed/CA.Berk.UC.HMA.G.6-21416.xml
 ```
 
+### `validate_all_xml`
+
+Checks every XML file under the configured usep-data inscription tree and reports totals plus malformed entries.
+
+Usage:
+
+```bash
+uv run ./manage.py validate_all_xml
+```
+
 ## Endpoints
 
 | Path | Methods | Protection | Purpose |
