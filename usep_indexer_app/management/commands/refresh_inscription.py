@@ -5,12 +5,16 @@ from usep_indexer_app.lib import reindex, spool
 
 class Command(BaseCommand):
     """
-    Immediately refreshes source data and strictly reindexes one inscription.
+    Refreshes the public files and Solr data for one inscription.
 
     Called by: Django management-command discovery
     """
 
-    help = 'Pull and copy current USEP data, then immediately reindex one inscription.'
+    help = (
+        "Refreshes one inscription's public representation: pulls and copies current USEP XML/resources for the "
+        'browser-rendered detail page, then updates its Solr-backed search, collection, publication, metadata, and '
+        'transcription data.'
+    )
 
     def add_arguments(self, parser: CommandParser) -> None:
         """
@@ -23,7 +27,7 @@ class Command(BaseCommand):
 
     def handle(self, *args: object, **options: object) -> None:
         """
-        Runs a locked single-inscription reindex and reports its result.
+        Runs a locked single-inscription refresh and reports its result.
 
         Called by: Django management-command runner
         """
@@ -31,10 +35,10 @@ class Command(BaseCommand):
         inscription_id = str(options['inscription_id'])
         with spool.processor_lock(settings.SPOOL_ROOT_PATH) as lock_acquired:
             if not lock_acquired:
-                raise CommandError('Another processor is active; the inscription was not reindexed.')
+                raise CommandError('Another processor is active; the inscription was not refreshed.')
             try:
                 inscription_path = reindex.process_single_reindex(inscription_id)
             except Exception as error:
-                raise CommandError(f'Unable to reindex inscription {inscription_id!r}: {error}') from error
-        self.stdout.write(self.style.SUCCESS(f'Reindexed inscription {inscription_id}: {inscription_path}'))
+                raise CommandError(f'Unable to refresh inscription {inscription_id!r}: {error}') from error
+        self.stdout.write(self.style.SUCCESS(f'Refreshed inscription {inscription_id}: {inscription_path}'))
         return

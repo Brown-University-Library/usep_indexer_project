@@ -109,7 +109,7 @@ def processor_lock(spool_root: Path) -> Iterator[bool]:
     """
     Attempts to hold the shared non-blocking processor lock.
 
-    Called by: process_spool(), management.commands.reindex_inscription.Command.handle()
+    Called by: process_spool(), management.commands.refresh_inscription.Command.handle()
     """
     ensure_spool_directories(spool_root)
     lock_path = spool_root / 'processor.lock'

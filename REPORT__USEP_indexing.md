@@ -37,7 +37,7 @@ This report describes the code in the current `usep_indexer_project` checkout an
 - Filesystem preparation pulls `usep-data`, flattens the three source inscription directories, copies resources and inscriptions to the web-served tree, and rewrites three XInclude URLs. These are local Git/subprocess/filesystem operations from the application's point of view, not the six Solr HTTP calls.
 - Solr indexing transforms and sends one inscription's searchable representation. This is the part that currently makes six HTTP requests.
 
-There are two ways to initiate work for a single inscription. An ordinary GitHub-driven incremental event is accepted by the listener, saved in the spool, and later processed by `manage.py process_spool`. The newer `manage.py reindex_inscription ID` command immediately performs the same pull/copy preparation and indexes the selected inscription while holding the shared processor lock. The ordinary path treats bibliography and transcription failures as best-effort; the manual command reports either enrichment failure as a command failure. Both paths use the same six-request Solr implementation.
+There are two ways to initiate work for a single inscription. An ordinary GitHub-driven incremental event is accepted by the listener, saved in the spool, and later processed by `manage.py process_spool`. The newer `manage.py refresh_inscription ID` command immediately performs the same pull/copy preparation and indexes the selected inscription while holding the shared processor lock. The ordinary path treats bibliography and transcription failures as best-effort; the manual command reports either enrichment failure as a command failure. Both paths use the same six-request Solr implementation.
 
 ## The two outputs produced by indexing
 
@@ -61,7 +61,7 @@ A single-inscription reindex therefore still makes conceptual sense as a targete
 - Status, image, date, language, and other indexed metadata.
 - Searchable transcription text.
 
-It is not needed to render the inscription-detail page itself. The current `reindex_inscription` command nevertheless performs both sides of publication: it refreshes the copied XML/resources and then updates the selected Solr document. The capability is useful as a recovery and troubleshooting tool, although a name such as `refresh_inscription` would describe its combined responsibility more precisely. A more explicitly separated design could provide a data-sync operation, a Solr-only single-inscription reindex that works from prepared files, and a combined refresh operation that orchestrates both.
+It is not needed to render the inscription-detail page itself. The `refresh_inscription` command performs both sides of publication: it refreshes the copied XML/resources and then updates the selected Solr document. The capability is useful as a recovery and troubleshooting tool. A more explicitly separated design could provide a data-sync operation, a Solr-only single-inscription reindex that works from prepared files, and the existing combined refresh operation that orchestrates both.
 
 The filesystem copying and XInclude rewriting therefore have a real purpose: they publish the XML and resources consumed by the detail page. They are conceptually separate from the six Solr requests and can be optimized independently.
 
@@ -78,7 +78,7 @@ For a GitHub-driven incremental update, the current flow is:
 7. For each changed path in one of the three inscription source directories, the filename is used to select the corresponding flattened XML file.
 8. The indexer transforms that XML with `USEp_to_Solr.xsl` and begins the six-request Solr sequence described below.
 
-The direct `reindex_inscription` management command starts at step 4 after validating the requested bare ID and acquiring the same lock. It also verifies that the selected copied XML exists before indexing it. It does not queue the request.
+The direct `refresh_inscription` management command starts at step 4 after validating the requested bare ID and acquiring the same lock. It also verifies that the selected copied XML exists before indexing it. It does not queue the request.
 
 The full-copy preparation is deliberately conservative. A source file may move among the three status directories, duplicate basenames are resolved by overlay order, resources can change, and deleted files must disappear from the published tree. Rebuilding the flattened tree makes those rules simple and repeatable, although it means that “reindex one” currently scans and copies far more than one file.
 
@@ -171,7 +171,7 @@ The code also reparses `titles.xml`, reloads both XSL files, reparses inscriptio
 
 ### 6. Filesystem preparation is broad but is not the six-call problem
 
-Both incremental processing and `reindex_inscription` rebuild the complete flattened inscription tree, mirror all resources, and scan every copied XML file for XInclude replacements. This is more work than the selected inscription alone requires, but it guarantees overlay precedence, handles source moves/deletions, and keeps the browser-served corpus synchronized.
+Both incremental processing and `refresh_inscription` rebuild the complete flattened inscription tree, mirror all resources, and scan every copied XML file for XInclude replacements. This is more work than the selected inscription alone requires, but it guarantees overlay precedence, handles source moves/deletions, and keeps the browser-served corpus synchronized.
 
 It can be optimized later by resolving the winning source file for one basename and copying only affected files/resources, but that introduces more edge cases than the Solr-call reduction. It should be treated as a separate improvement with tests for moves among `bib_only`, `metadata_only`, and `transcribed`, duplicate basenames, deletions, and resource-only changes.
 
@@ -248,7 +248,7 @@ Indexer documentation and orchestration:
 - `usep_indexer_app/lib/processor.py`
 - `usep_indexer_app/lib/reindex.py`
 - `usep_indexer_app/lib/indexer.py`
-- `usep_indexer_app/management/commands/reindex_inscription.py`
+- `usep_indexer_app/management/commands/refresh_inscription.py`
 
 HTTP and enrichment implementation:
 
@@ -256,7 +256,7 @@ HTTP and enrichment implementation:
 - `usep_indexer_app/lib/bibliography.py`
 - `usep_indexer_app/lib/transcription.py`
 - `usep_indexer_app/tests/test_helpers.py`
-- `usep_indexer_app/tests/test_reindex_inscription.py`
+- `usep_indexer_app/tests/test_refresh_inscription.py`
 
 Source data and transformations:
 

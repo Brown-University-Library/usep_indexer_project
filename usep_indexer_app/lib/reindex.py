@@ -116,12 +116,12 @@ def process_full_reindex() -> None:
 
 def process_single_reindex(inscription_id: str) -> Path:
     """
-    Pulls and copies current USEP data, then strictly reindexes one inscription.
+    Refreshes one inscription's published files and Solr document.
 
-    Called by: management.commands.reindex_inscription.Command.handle()
+    Called by: management.commands.refresh_inscription.Command.handle()
     """
     filename = build_inscription_filename(inscription_id)
-    log.info(f'Single-inscription reindex started; inscription_id, ``{inscription_id}``')
+    log.info(f'Single-inscription refresh started; inscription_id, ``{inscription_id}``')
     processor.call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
     log.info(f'Git pull completed; git_clone_path, ``{settings.USEP_DATA_GIT_CLONED_DIR_PATH}``')
     processor.copy_files(
@@ -140,7 +140,7 @@ def process_single_reindex(inscription_id: str) -> Path:
     if not inscription_path.is_file():
         raise FileNotFoundError(f'No copied inscription XML exists for ID {inscription_id!r}: {inscription_path}')
     indexer.update_index_entry(filename, strict_enrichment=True)
-    log.info(f'Single-inscription reindex completed; inscription_id, ``{inscription_id}``')
+    log.info(f'Single-inscription refresh completed; inscription_id, ``{inscription_id}``')
     return inscription_path
 
 
