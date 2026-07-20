@@ -19,6 +19,7 @@ _(Terms: the term `spool`, used below and in the project, refers to the filesyst
 - [More info](#more-info)
 - [Requirements](#requirements)
 - [Local installation](#local-installation)
+- [Management commands](#management-commands)
 - [Endpoints](#endpoints)
 - [Local HTTP listener check](#local-http-listener-check)
 - [Tests](#tests)
@@ -173,6 +174,36 @@ The production processor is intended to run every other minute. The command take
 
 ```cron
 */2 * * * * cd /path/to/usep_indexer_project && uv run ./manage.py process_spool
+```
+
+## Management commands
+
+The application adds the following project-specific commands. Run `uv run ./manage.py help` to see these and Django's built-in commands.
+
+### `process_spool`
+
+Typically run via cron, this processes one locked batch of queued webhook events, updates copied data and Solr, and records each event's outcome.
+
+Usage:
+
+```bash
+uv run ./manage.py process_spool
+```
+
+### `validate_xml`
+
+Checks whether one local or remote XML document is well-formed without changing data.
+
+Usage with a local file path:
+
+```bash
+uv run ./manage.py validate_xml /path/to/inscription.xml
+```
+
+Usage with an HTTP(S) URL:
+
+```bash
+uv run ./manage.py validate_xml https://raw.githubusercontent.com/Brown-University-Library/usep-data/refs/heads/master/xml_inscriptions/transcribed/CA.Berk.UC.HMA.G.6-21416.xml
 ```
 
 ## Endpoints
