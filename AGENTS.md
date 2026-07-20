@@ -138,6 +138,12 @@ When implementing a change (especially from an issue/task):
 3. Update tests and run: `uv run ./run_tests.py`
 4. If you cannot run tests in your environment, still write/adjust tests and state what you would run.
 
+### Commit messages
+
+- Group related files into logical, focused commits; do not require a separate commit for every file.
+- Keep each commit message brief, with no more than ten words.
+- Write messages in the present tense so they complete the phrase "This commit..." Begin with a fitting verb such as "Adds," "Implements," or "Updates."
+
 
 ## If instructions are missing or ambiguous
 
@@ -151,14 +157,15 @@ When implementing a change (especially from an issue/task):
 
 ## Agent project index
 
-Use this section as a map, not as a substitute for reading the relevant code. Paths in this section are relative to the project root unless they begin with `../`. The normal local checkout has an outer “stuff” directory, but configured paths are authoritative and may be elsewhere in another environment.
+Use this section as a fast orientation map, not as a substitute for reading the relevant code. Paths are relative to the project root unless they begin with `../`. The normal checkout sits inside an outer “stuff” directory alongside source and generated data, but `.env` settings are authoritative and deployments may use different paths.
 
 ### System shape
 
-- This is a small Django 5.2 WSGI service with three jobs: accept GitHub push notifications, durably queue work on the filesystem, and synchronize/index USEP TEI XML into Solr.
+- This is a small, synchronous Django 5.2 WSGI service with three concerns: accept GitHub push notifications, durably queue work on the filesystem, and synchronize/index USEP TEI XML into Solr.
 - The web listener and the processor are deliberately separate. A successful listener response means an event was saved, not that Git, file copying, or Solr work finished.
 - There is intentionally no database. Do not add models, migrations, Django admin/auth/contenttypes, or database-backed sessions without an explicit architecture change. The only session use is the signed-cookie orphan-confirmation flow.
 - `config/urls.py` is the complete endpoint map; every endpoint is implemented directly in `usep_indexer_app/views.py`. Domain work belongs in `usep_indexer_app/lib/`.
+- `../usep-data/` is a separate Git repository containing the TEI source, `titles.xml`, Schematron, Oxygen Author support, and XSL resources. The indexer repository copies from it but does not own that content.
 - `README.md` is the operator setup guide and endpoint summary. Its final link to `REPORT_redis_rq_alternative.md` currently names a file that is not in this repository, so do not rely on that report being available.
 
 ### Find code by concern
@@ -169,6 +176,7 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 | Basic Auth | `usep_indexer_app/lib/auth.py` | `config/settings.py` for setting names |
 | GitHub payload parsing | `usep_indexer_app/lib/payloads.py` | `views.handle_github_push()` and the sanitized test fixture |
 | Durable queue schema and lifecycle | `usep_indexer_app/lib/spool.py` | `management/commands/process_spool.py`, `lib/processing_check_helper.py` |
+| Job-level failure email | `management/commands/process_spool.py` | `config/settings.py` for `ADMINS` and mail settings; `tests/test_spool.py` |
 | Git pull, `rsync`, and XInclude rewriting | `usep_indexer_app/lib/processor.py` | `lib/reindex.py` for the full workflow |
 | Main XML-to-Solr transformation | `usep_indexer_app/lib/indexer.py` | runtime XSL configured by `SOLR_XSL_PATH`; source copy is normally under `../usep-data/resources/xsl/` |
 | Solr HTTP requests | `usep_indexer_app/lib/solr_client.py` | callers in `indexer.py`, `bibliography.py`, `transcription.py`, and `orphans.py` |
@@ -190,16 +198,18 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 4. Any full-reindex event in a claimed batch selects the full workflow for that entire batch. Otherwise, one incremental workflow handles the coalesced changed paths.
 5. Both workflows run `git pull`, rebuild the flattened data directories with `rsync`, and rewrite three known absolute XInclude URLs in the web-served inscription copies.
 6. Incremental indexing only acts on paths containing a source-directory component in `{'bib_only', 'metadata_only', 'transcribed'}`. Full reindexing indexes every flattened `*.xml` file and removes Solr IDs absent from that filesystem set.
-7. The main XSLT produces the Solr document. Bibliography ancestors and searchable transcription are then sent as separate atomic updates.
+7. For each selected inscription, the main XSLT produces and posts the base Solr document. Bibliography ancestors and searchable transcription are then sent as separate atomic updates.
+8. A full reindex queries all Solr IDs, deletes IDs absent from the flattened filesystem, then processes every flattened `*.xml` file in filename order. It updates the configured core in place; there is no alternate-core build or atomic cutover.
 
 ### Queue lifecycle and behavior
 
 - `SPOOL_ROOT_PATH` contains `pending/`, `processing/`, `completed/`, `failed/`, and `quarantine/`, plus `processor.lock` and `processor-status.json`. The app creates the lifecycle directories.
 - The event schema uses an exact key set. Unknown/missing keys, unsupported schema versions or event types, invalid UUIDs/timestamps/path lists, and malformed JSON go to `quarantine/` rather than blocking other valid events.
+- Quarantining malformed events does not make the invocation status `failed`; a batch containing only malformed events can finish with status `success` and a nonzero quarantine count.
 - A processing exception applies to the whole coalesced valid batch: every valid event gets the same failed attempt, then returns to `pending/` or moves to `failed/` at `SPOOL_MAX_ATTEMPTS`.
 - Files already under `processing/` are replayed before new pending files after a crash. Processing must therefore be safe to repeat.
 - Completed retention is based on completion-time file modification time, not original receipt time.
-- A busy lock returns status `locked` without claiming work. The management command only raises `CommandError` for status `failed`.
+- A busy lock returns status `locked` without claiming work. For status `failed`, the management command sends one summary email through Django's `mail_admins()` and then raises `CommandError`; successful and locked invocations do not send job-failure email. Each failed retry invocation can therefore send one email.
 - Health is based on whether the last `running`/`success` timestamp is fresh enough. Backlog counts are reported, but a backlog by itself does not change `processing_active` to `processing_not_active`.
 - Queue correctness assumes a durable local POSIX filesystem with atomic rename, directory synchronization, and `flock`; do not move it to an arbitrary network/object filesystem without revisiting those assumptions.
 
@@ -212,16 +222,26 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 - XInclude replacement is literal and limited to the three URLs in `processor.XINCLUDE_REPLACEMENTS`. It rewrites only the web-served inscription copies after flattening; it does not modify the source clone or temporary flattened copies.
 - Incremental resource-only changes are copied but ignored by `indexer.update_index()`. A change to `titles.xml`, an indexing XSL, or another resource may therefore require an explicitly queued full reindex to affect existing Solr documents.
 
+### Solr request pattern and performance
+
+- `solr_client.py` uses synchronous top-level `httpx` calls with a 30-second timeout. Requests are sequential and do not share a persistent `httpx.Client` connection.
+- The normal per-inscription path performs six Solr HTTP calls: post the base XML document, select direct bibliography IDs, post the bibliography atomic update, soft commit, post the transcription atomic update, and soft commit again.
+- The source `USEp_to_Solr.xsl` emits `<add commitWithin="500">`. Bibliography and transcription additionally request explicit soft commits; deletions include a hard commit in each request.
+- Full reindexing deletes stale IDs first and then updates every inscription one at a time. At several thousand records, request and commit count—not corpus size—is the main performance concern.
+- XML/XSL parsing and transformation are also per inscription. `bibliography.add_bibliography()` reparses `titles.xml`, and the main and transcription paths reload their XSL resources for each applicable document.
+
 ### Failure boundaries and compatibility gotchas
 
-- Failure of the main XML parse/XSLT/Solr post propagates and retries the whole queue batch. Bibliography and transcription enrichment are best-effort: their exceptions are logged but do not fail the main inscription update or retry the event.
+- Failure of Git, `rsync`, main XML parsing/XSLT, the base Solr post, or an index deletion propagates and retries the whole claimed queue batch. Work completed before the error is not rolled back, so retries must remain safe to repeat.
+- Bibliography and transcription enrichment are best-effort: their exceptions are logged but do not fail the main inscription update, retry the event, change the job status, or individually send admin email. A job can therefore finish successfully with missing enrichment fields; inspect logs when completeness matters.
+- A processor result with status `failed` triggers one `mail_admins()` summary at the management-command boundary. Email delivery failure is logged and does not hide the original `CommandError`; failures before `spool.process_spool()` returns and abrupt process termination cannot use this notification path.
 - Incremental paths are reduced to their basename when locating a flattened inscription and deriving the Solr ID. The three source directories therefore share one filename/ID namespace.
 - Malformed GitHub JSON is intentionally acknowledged and queued as an incremental event with empty path lists. An empty-body request to `/` queues nothing, while `/force/` queues even without a body.
 - The listener validates Basic Auth but does not validate a GitHub HMAC signature. Its security depends on strong credentials and deployment behind HTTPS. Preserve compatibility unless a task explicitly changes this contract.
 - `/reindex_all/` and orphan deletion are state-changing GET flows retained for legacy compatibility. Orphan deletion relies on the preceding `/list_orphans/` response putting all candidate IDs into a signed browser cookie.
 - `/processing_check/` compares `REMOTE_ADDR` directly with `LEGIT_IPS`; it is not proxy-header aware. `/info/`, `/version/`, and production `/error_check/` are public.
 - `/list_orphans/` deliberately omits configured filesystem and Solr locations from its HTML/JSON context. It exposes only a safe index label: Solr hostnames beginning with `d` display as dev, those beginning with `p` display as prod, and other hostnames use a neutral label. Preserve that information-disclosure boundary when changing the response context or template.
-- The main settings module asserts that `../.env` exists during import and loads it with `override=True`. JSON-suffixed values must be valid JSON, required email/log/cache values must exist even when not central to a command, and the log directory must already exist. Prefer absolute configured paths because unresolved relative paths depend on the process working directory.
+- The main settings module asserts that `../.env` exists during import and loads it with `override=True`. JSON-suffixed values must be valid JSON, required email/log/cache values must exist even when not central to a command, and the log directory must already exist. Prefer absolute configured paths because unresolved relative paths depend on the process working directory. Use `config/dotenv_example_file.txt` for configuration shape, never a real outer `.env`.
 - `USE_TZ` is false for Django-facing times, while spool document timestamps are timezone-aware UTC and queue filenames are rendered in `settings.TIME_ZONE`.
 - The version endpoint reads loose `.git/HEAD` and branch-ref files directly. A deployment without `.git`, with packed refs, or with a detached head can return fallback/detached metadata; results are cached briefly.
 
@@ -229,6 +249,7 @@ Use this section as a map, not as a substitute for reading the relevant code. Pa
 
 - `uv run ./run_tests.py -v` uses `config.settings_run_tests`, requires no outer `.env`, database, Solr, data clone, Git pull, or `rsync`.
 - Pass dotted Django test targets after `run_tests.py` for focused work, for example `uv run ./run_tests.py -v usep_indexer_app.tests.test_spool`.
+- CI is `.github/workflows/ci_tests.yaml`; it runs `uv sync --locked --group ci_tests` and `uv run ./run_tests.py` on Ubuntu for pushes and pull requests targeting `main`.
 - `uv run ./check_web_listener.py` starts a loopback WSGI server and uses a temporary queue by default. It checks rejected and accepted Basic Auth requests without invoking the processor or external services.
 - `check_web_listener.py --use-real-directory` is not isolated: it reads selected outer `.env` values, writes the configured log, and intentionally leaves a real pending event. Use that flag only when the task calls for it.
 - Running `process_spool`, calling `/reindex_all/`, or exercising the full processor can pull the sibling Git clone, delete/mirror generated files via `rsync --delete`, consume real queued work, and modify Solr. Do not use these as routine verification without explicit authorization and a known-safe environment.
