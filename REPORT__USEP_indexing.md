@@ -53,6 +53,16 @@ usep-data source XML and resources
 
 This explains why updating Solr alone is not the complete publishing operation. The public webapp's inscription-detail view does not retrieve the inscription from Solr. It gives the browser URLs for the copied inscription XML and display stylesheets; client-side Saxon code loads the XML and performs the display transformation. By contrast, search results, collection listings, and publication-to-inscription listings query Solr.
 
+A single-inscription reindex therefore still makes conceptual sense as a targeted way to repair or refresh the Solr-backed parts of the site:
+
+- Search results and facets.
+- Collection listings.
+- Publication-to-inscription relationships.
+- Status, image, date, language, and other indexed metadata.
+- Searchable transcription text.
+
+It is not needed to render the inscription-detail page itself. The current `reindex_inscription` command nevertheless performs both sides of publication: it refreshes the copied XML/resources and then updates the selected Solr document. The capability is useful as a recovery and troubleshooting tool, although a name such as `refresh_inscription` would describe its combined responsibility more precisely. A more explicitly separated design could provide a data-sync operation, a Solr-only single-inscription reindex that works from prepared files, and a combined refresh operation that orchestrates both.
+
 The filesystem copying and XInclude rewriting therefore have a real purpose: they publish the XML and resources consumed by the detail page. They are conceptually separate from the six Solr requests and can be optimized independently.
 
 ## End-to-end flow for one inscription
