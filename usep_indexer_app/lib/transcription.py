@@ -20,7 +20,7 @@ def add_transcription(solr_url: str, xsl_path: Path, inscription_id: str, xml_pa
     """
     Builds and posts the transcription field for one inscription.
 
-    Called by: indexer.update_transcription()
+    Called by: indexer.update_transcription(), indexer.update_index_entry()
     """
     transcription = build_transcription(xml_path, xsl_path)
     update_data = {

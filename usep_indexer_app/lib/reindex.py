@@ -15,6 +15,25 @@ from usep_indexer_app.lib import indexer, orphans, processor, solr_client, xml_v
 log = logging.getLogger(__name__)
 
 
+def build_inscription_filename(inscription_id: str) -> str:
+    """
+    Validates a bare inscription ID and returns its XML filename.
+
+    Called by: process_single_reindex()
+    """
+    invalid_control_character = any(ord(character) < 32 or ord(character) == 127 for character in inscription_id)
+    if not inscription_id or inscription_id != inscription_id.strip():
+        raise ValueError('The inscription ID cannot be empty or begin or end with whitespace.')
+    if inscription_id in {'.', '..'} or '/' in inscription_id or '\\' in inscription_id:
+        raise ValueError('The inscription ID must be a bare ID, not a filesystem path.')
+    if invalid_control_character:
+        raise ValueError('The inscription ID cannot contain control characters.')
+    if inscription_id.endswith('.xml'):
+        raise ValueError('Provide the inscription ID without the .xml extension.')
+    filename = f'{inscription_id}.xml'
+    return filename
+
+
 def build_inscription_filepaths(inscriptions_path: Path) -> list[str]:
     """
     Returns every XML inscription path in stable order.
@@ -54,9 +73,7 @@ def validate_inscription_corpus(inscriptions_path: Path) -> None:
         failure_count: int = len(result.failures)
         file_label: str = 'file' if failure_count == 1 else 'files'
         verb: str = 'is' if failure_count == 1 else 'are'
-        failure_details: str = '; '.join(
-            f'{failure.path.as_posix()}: {failure.error}' for failure in result.failures
-        )
+        failure_details: str = '; '.join(f'{failure.path.as_posix()}: {failure.error}' for failure in result.failures)
         raise xml_validation.XMLNotWellFormedError(
             f'Found {failure_count} source XML {file_label} that {verb} not well-formed: {failure_details}'
         )
@@ -95,6 +112,36 @@ def process_full_reindex() -> None:
     update_all_index_entries(filepaths, ids_to_remove)
     log.info('Full Solr indexing completed.')
     return
+
+
+def process_single_reindex(inscription_id: str) -> Path:
+    """
+    Pulls and copies current USEP data, then strictly reindexes one inscription.
+
+    Called by: management.commands.reindex_inscription.Command.handle()
+    """
+    filename = build_inscription_filename(inscription_id)
+    log.info(f'Single-inscription reindex started; inscription_id, ``{inscription_id}``')
+    processor.call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
+    log.info(f'Git pull completed; git_clone_path, ``{settings.USEP_DATA_GIT_CLONED_DIR_PATH}``')
+    processor.copy_files(
+        settings.USEP_DATA_GIT_CLONED_DIR_PATH,
+        settings.TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH,
+        settings.WEBSERVED_DATA_DIR_PATH,
+    )
+    log.info(f'USEP data copy completed; webserved_data_path, ``{settings.WEBSERVED_DATA_DIR_PATH}``')
+    inscriptions_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions'
+    changed_file_count = processor.update_xinclude_references(inscriptions_path)
+    log.info(
+        f'XInclude normalization completed; inscriptions_path, ``{inscriptions_path}``; '
+        f'changed_file_count, ``{changed_file_count}``'
+    )
+    inscription_path = inscriptions_path / filename
+    if not inscription_path.is_file():
+        raise FileNotFoundError(f'No copied inscription XML exists for ID {inscription_id!r}: {inscription_path}')
+    indexer.update_index_entry(filename, strict_enrichment=True)
+    log.info(f'Single-inscription reindex completed; inscription_id, ``{inscription_id}``')
+    return inscription_path
 
 
 def update_all_index_entries(inscriptions_to_index: list[str], ids_to_remove: list[str]) -> None:

@@ -17,11 +17,11 @@ log = logging.getLogger(__name__)
 INDEXED_SOURCE_DIRECTORIES = {'bib_only', 'metadata_only', 'transcribed'}
 
 
-def update_index_entry(filename: str) -> None:
+def update_index_entry(filename: str, *, strict_enrichment: bool = False) -> None:
     """
     Transforms and posts one inscription, then updates related fields.
 
-    Called by: update_entry()
+    Called by: update_entry(), reindex.process_single_reindex()
     """
     inscription_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions' / filename
     solr_xml = build_solr_document(inscription_path, settings.SOLR_XSL_PATH)
@@ -31,8 +31,17 @@ def update_index_entry(filename: str) -> None:
         log.error(f'Solr XML update failed; filename, ``{filename}``; inscription_path, ``{inscription_path}``')
         raise
     inscription_id = filename.removesuffix('.xml')
-    update_bibliography(inscription_id)
-    update_transcription(inscription_id, inscription_path)
+    if strict_enrichment:
+        bibliography.add_bibliography(settings.SOLR_URL, settings.TITLES_XML_PATH, inscription_id)
+        transcription.add_transcription(
+            settings.SOLR_URL,
+            settings.TRANSCRIPTION_PARSER_XSL_PATH,
+            inscription_id,
+            inscription_path,
+        )
+    else:
+        update_bibliography(inscription_id)
+        update_transcription(inscription_id, inscription_path)
     return
 
 

@@ -18,7 +18,7 @@ def add_bibliography(solr_url: str, titles_xml_path: Path, inscription_id: str) 
     """
     Adds ancestor bibliography IDs from titles.xml to a Solr inscription.
 
-    Called by: indexer.update_bibliography()
+    Called by: indexer.update_bibliography(), indexer.update_index_entry()
     """
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
     titles_xml = etree.parse(titles_xml_path, parser=parser)

@@ -6,12 +6,14 @@ handling, validation and isolation of malformed event-data, non-overlapping proc
 cleanup, and processor-health data.
 """
 
+import contextlib
 import datetime
 import fcntl
 import json
 import logging
 import os
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -100,6 +102,28 @@ def ensure_spool_directories(spool_root: Path) -> None:
     for directory_name in LIFECYCLE_DIRECTORIES:
         (spool_root / directory_name).mkdir(exist_ok=True)
     return
+
+
+@contextlib.contextmanager
+def processor_lock(spool_root: Path) -> Iterator[bool]:
+    """
+    Attempts to hold the shared non-blocking processor lock.
+
+    Called by: process_spool(), management.commands.reindex_inscription.Command.handle()
+    """
+    ensure_spool_directories(spool_root)
+    lock_path = spool_root / 'processor.lock'
+    with lock_path.open('a+', encoding='utf-8') as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log.info('Another filesystem-queue processor holds %s.', lock_path)
+            yield False
+        else:
+            try:
+                yield True
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def build_event_document(
@@ -530,14 +554,9 @@ def process_spool(spool_root: Path, batch_size: int, max_attempts: int, retentio
         raise ValueError('Spool maximum attempts must be at least one.')
     ensure_spool_directories(spool_root)
     started_at = utc_now()
-    lock_path = spool_root / 'processor.lock'
     result = ProcessResult(status='locked')
-    with lock_path.open('a+', encoding='utf-8') as lock_file:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            log.info('Another filesystem-queue processor holds %s.', lock_path)
-        else:
+    with processor_lock(spool_root) as lock_acquired:
+        if lock_acquired:
             write_processor_status(
                 spool_root,
                 {
@@ -561,8 +580,6 @@ def process_spool(spool_root: Path, batch_size: int, max_attempts: int, retentio
                     status='failed',
                     error=f'{type(error).__name__}: {error}'[:MAX_ERROR_LENGTH],
                 )
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             finished_at = utc_now()
             write_processor_status(
                 spool_root,
