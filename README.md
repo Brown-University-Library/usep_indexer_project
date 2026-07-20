@@ -13,7 +13,18 @@ The project intentionally has no database. It omits Django admin, auth, contentt
 _(Terms: the term `spool`, used below and in the project, refers to the filesystem-backed work queue where accepted requests are stored as event files until the processor handles them.)_
 
 
-## Overveiw
+## Table of contents
+
+- [Overview](#overview)
+- [More info](#more-info)
+- [Requirements](#requirements)
+- [Local installation](#local-installation)
+- [Endpoints](#endpoints)
+- [Local HTTP listener check](#local-http-listener-check)
+- [Tests](#tests)
+
+
+## Overview
 
 There are three main parts to this webapp:
 
@@ -22,14 +33,23 @@ There are three main parts to this webapp:
 - An indexer, invoked by the processor, that prepares the Solr documents and posts the updates to Solr.
 
 
-## Table of contents
+## More info
 
-- [Overveiw](#overveiw)
-- [Requirements](#requirements)
-- [Local installation](#local-installation)
-- [Endpoints](#endpoints)
-- [Local HTTP listener check](#local-http-listener-check)
-- [Tests](#tests)
+The listener and processor are deliberately separate. For each accepted GitHub push, the listener gathers the added, modified, and removed paths from all commits in the payload and writes one durable JSON event under the spool's `pending/` directory. Returning a successful HTTP response means that the event was saved; the listener does not pull Git data, copy files, or contact Solr. A `reindex_all` request similarly writes one event, but uses the `full_reindex` event type and empty file lists because the complete set of inscriptions is discovered later by the processor.
+
+The processor is a Django management command intended to run on a cron schedule. It claims queued events in batches, combines their file changes, and prevents overlapping processor runs with a filesystem lock. Before indexing, it pulls the `usep_data` clone and rebuilds the flattened web-served data. An incremental batch updates only the affected inscription paths, while any `full_reindex` event in a batch selects the full workflow: index every current inscription and remove Solr IDs that no longer have a corresponding XML file. Successfully handled events move to `completed/`; failures are recorded and retried up to the configured limit.
+
+For each inscription being indexed, the normal Solr workflow makes six sequential HTTP requests:
+
+1. Post the main Solr XML document produced by the indexing XSL.
+2. Query the document's direct bibliography IDs.
+3. Post an atomic update adding inherited bibliography IDs.
+4. Request a soft commit so those changes become searchable.
+5. Post an atomic update containing the searchable transcription.
+6. Request another soft commit.
+
+Each request must finish before the next begins, so the indexer does not send concurrent updates. Deletions are also performed sequentially and each deletion request includes a hard commit. Bibliography and transcription enrichment are best-effort: an error in either is logged without stopping the main inscription update, whereas a failed main update or deletion fails the queued batch so it can be retried.
+
 
 ## Requirements
 
