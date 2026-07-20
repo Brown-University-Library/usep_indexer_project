@@ -6,11 +6,13 @@ The current indexer makes exactly six sequential HTTP requests to Solr for every
 
 The logical work is necessary: create the main search document, derive bibliography relationships, derive searchable transcription text, and make the result visible to searches. The present request boundaries are mostly not necessary. The indexer already has the inscription XML and `titles.xml` locally, so it can calculate all fields before contacting Solr and send one complete document. If the deployed Solr configuration requires an explicit visibility operation, the result could instead be one document update followed by one soft commit.
 
-There is also a more important issue to settle before optimizing the calls. The bibliography enrichment looks for `<bibl>` elements nested inside other `<bibl>` elements in `titles.xml`. The current `titles.xml` contains 1,285 `<bibl>` elements and none is nested inside another. The hierarchy was flattened in the data repository in 2021; relationships now appear to be represented by references such as `ref="#AA"`. Consequently, the current “inherited bibliography” calculation appears to return no inherited IDs, and three of the six requests query, post, and commit an enrichment that does not add anything. This should be confirmed with production Solr data, but it is directly observable in the current source and code.
+There is also a more important issue to fix before optimizing the calls. The bibliography enrichment looks for `<bibl>` elements nested inside other `<bibl>` elements in `titles.xml`. The current `titles.xml` contains 1,285 `<bibl>` elements and none is nested inside another. The hierarchy was flattened in the data repository in 2021; relationships are now represented by references such as `ref="#AA"`. Consequently, the current “inherited bibliography” calculation returns no inherited IDs, and three of the six requests query, post, and commit an enrichment that does not add anything.
+
+Review of the webapp and live site confirms that these parent relationships are still required. The Publications page constructs parent-journal and child-publication links from the flat `titles.xml`; the selected publication page then finds inscriptions using an exact `bib_ids:<publication-id>` Solr query. At the time of review, the live AJA and AJP parent pages each returned zero inscriptions, while representative child-publication pages returned 43 and 39. This is the visible consequence of the indexer retaining direct citation IDs but failing to add their referenced parent IDs.
 
 The recommended direction is therefore:
 
-1. Confirm the intended bibliography semantics and repair or remove inherited-ID generation.
+1. Replace XML-ancestor bibliography discovery with relationship discovery from the current flat `titles.xml` references, then rebuild the affected Solr data.
 2. Build a complete Solr document locally, including transcription and the intended bibliography IDs.
 3. Post that complete document once, using one consistent visibility policy.
 4. Separately optimize full-reindex batching, parser reuse, HTTP connection reuse, and—only if worthwhile—the filesystem preparation steps.
@@ -23,6 +25,7 @@ The recommended direction is therefore:
 - [The six Solr HTTP requests](#the-six-solr-http-requests)
 - [Why the current sequence is sequential](#why-the-current-sequence-is-sequential)
 - [What is actually necessary](#what-is-actually-necessary)
+- [What the front end requires from titles.xml](#what-the-front-end-requires-from-titlesxml)
 - [Findings and risks](#findings-and-risks)
 - [Forthright simplification options](#forthright-simplification-options)
 - [Recommended implementation sequence](#recommended-implementation-sequence)
@@ -125,6 +128,72 @@ The necessary final-state work is:
 
 None of those requirements mandates six Solr requests. The cleanest representation is one fully assembled document sent once. A second request is defensible only if an explicit soft commit cannot or should not be coupled to that update and prompt visibility is required.
 
+## What the front end requires from titles.xml
+
+### Collections and Publications use different Solr relationships
+
+The requested review began with the public [Collections page](https://library.brown.edu/projects/usep/collections/). That part of the site does not establish a requirement for bibliography parents. The collections overview is built from the webapp's collection records, and a collection-detail page retrieves inscriptions with an ID-prefix Solr query such as `id:CA.Malibu.JPGM*`. It does not query `titles.xml` or `bib_ids`.
+
+The [Publications page](https://library.brown.edu/projects/usep/publications/) is the relevant consumer. Its current path is:
+
+```text
+titles.xml + pubs.xsl
+        |
+        +--> browser creates publication links
+                       |
+                       +--> /publication/<bibliography-id>/
+                                      |
+                                      +--> Solr query: bib_ids:<bibliography-id>
+```
+
+The publications overview is transformed in the browser from the current flat `titles.xml`. Its stylesheet was explicitly rewritten for that representation in 2021. It groups journal articles using `title[@level='j']/@ref`, groups corpus volumes using `title[@level='s']/@ref`, and links monographs directly by their own `xml:id`. The active publication-result view does not interpret the bibliography hierarchy itself; it asks Solr for documents whose `bib_ids` exactly contains the selected ID.
+
+The older `Publications` model class, which expects fields such as `bib_ids_types` and `bib_titles_all`, is not used by the active publications view. The current public interface therefore needs one essential indexed field for this purpose: a correct, multivalued `bib_ids` containing the directly cited bibliography entry and every parent under which that citation should be found.
+
+### The failure is visible on the live site
+
+The source analysis is consistent with the live result pages observed on 2026-07-20:
+
+| Publication link | Relationship in `titles.xml` | Live inscription count |
+| --- | --- | ---: |
+| [AJA](https://library.brown.edu/projects/usep/publication/AJA/) | Parent journal | 0 |
+| [AJA_Dennison](https://library.brown.edu/projects/usep/publication/AJA_Dennison/) | Child article | 43 |
+| [AJP](https://library.brown.edu/projects/usep/publication/AJP/) | Parent journal | 0 |
+| [AJP_Wilson4](https://library.brown.edu/projects/usep/publication/AJP_Wilson4/) | Child article | 39 |
+
+The Publications overview makes the parent journal names clickable. A parent page returning zero while its child pages return inscriptions is not an intentional absence of private or hidden data; it is a broken public aggregation. Direct IDs were indexed, but the referenced parent IDs were not.
+
+The corpus display currently links individual volumes but has its parent-corpus link commented out in `pubs.xsl`. Parent-corpus IDs should still be derived: they were part of the older nested semantics, they make the index internally consistent, and they allow the parent link to be restored later without another indexing-model change.
+
+### What the flat file actually represents
+
+The current `titles.xml` has 1,285 bibliography entries and zero nested bibliography entries. It contains 666 `title/@ref` relationships. Each child has at most one such parent, and every valid relationship is one level deep in the current file.
+
+The references are not perfectly uniform:
+
+- 641 values are fragment-style references such as `#AA`.
+- 25 are bare local IDs such as `TEAD_PR`.
+- After removing an optional leading `#`, 665 references resolve to an existing `bibl/@xml:id`.
+- `ObjectBiographies_Powers` refers to the nonexistent `HCD`; the apparent intended parent is `ObjectBiographies`.
+
+The front-end stylesheet assumes a leading `#` for the journal and corpus groups it renders, so the 25 bare IDs are also a data/front-end consistency problem. The indexer should nevertheless accept both forms. It can improve Solr's relationships without waiting for every source-data inconsistency to be corrected.
+
+### The indexer can meet the requirement
+
+Yes: the indexer can be updated to provide what the active webapp needs, without changing the webapp's publication-result query. The replacement rule should be:
+
+1. Build a lookup from each `bibl/@xml:id` to the local IDs named by its descendant `title/@ref` attributes.
+2. Treat `#ID` and `ID` as the same local target, but accept the target only if that `xml:id` exists in `titles.xml`.
+3. For every direct `bib_id` extracted from an inscription, retain that ID and add all valid parent IDs reached through the lookup.
+4. Follow references recursively with a visited-ID set, even though current data has only one-level relationships. This handles future multi-level data and prevents a malformed cycle from looping forever.
+5. Deduplicate the completed list before sending it to Solr.
+
+Examples from current data include `Brueckner1926 -> AA`, `AJA_Dennison -> AJA`, `MAAR_GiganteHouston -> MAAR`, `CIL_VI -> CIL`, and `TEAD_PR_1 -> TEAD_PR`. The lookup must search descendant titles rather than direct child titles only, because some entries, including `CEG_1` and `CEG_2`, wrap the parent-bearing title inside another title.
+
+The smallest repair is to replace the ancestor XPath in `bibliography.add_bibliography()` with this lookup and retain the existing atomic update. The preferable implementation is still to derive direct and parent IDs locally, put their complete value into the main Solr document, and send that document once. A complete-field `set` or full-document replacement is safer than an isolated atomic `add`, because a changed `titles.xml` relationship must also be able to remove a stale parent ID.
+
+After this correction, existing documents require a full Solr rebuild; refreshing only subsequently edited inscriptions would leave the rest of the public parent-publication pages incomplete. Future changes to `titles.xml` should likewise be treated as an indexing dependency and trigger an appropriate bibliography rebuild, because the relationship can change even when no inscription XML changes.
+
 ## Findings and risks
 
 ### 1. The inherited-bibliography code no longer matches `titles.xml`
@@ -139,9 +208,9 @@ That made sense with the older hierarchical data. For example, in the pre-flatte
 
 The data history shows the flattening entering `titles.xml` in commit `269e53044` on 2021-08-05 and becoming the merged mainline shape in November 2021. The new Django indexer already contained the ancestor-XPath behavior in its initial commit in July 2026. This strongly suggests a legacy assumption survived the data-model change.
 
-On current data, request 3 is therefore expected to send an atomic `add` of an empty list. Requests 2 and 3 do not create the intended inherited relationship, and request 4 merely commits the state. Direct bibliography IDs still come from request 1, so publication pages that query an exact directly cited ID can work; queries intended to find inscriptions through a parent journal/corpus ID may be incomplete.
+On current data, request 3 is therefore expected to send an atomic `add` of an empty list. Requests 2 and 3 do not create the intended inherited relationship, and request 4 merely commits the state. Direct bibliography IDs still come from request 1, so publication pages that query an exact directly cited ID work; parent-journal queries are incomplete.
 
-Before changing request counts, the project should decide whether parent relationships are still required. If they are, the code should follow the current reference representation, including any required multi-level traversal, rather than XML ancestry. If they are not, the bibliography enrichment module and requests 2–4 should be removed.
+The webapp and live-site investigation resolves the earlier product question: parent relationships are required. The code should follow the current reference representation rather than XML ancestry. Removing the enrichment without replacing its intended result would preserve the live defect.
 
 ### 2. The read-after-write bibliography query has a visibility race
 
@@ -177,11 +246,11 @@ It can be optimized later by resolving the winning source file for one basename 
 
 ## Forthright simplification options
 
-### Option A: Remove only demonstrably redundant work
+### Option A: Repair bibliography relationships in place
 
-If inherited bibliography is no longer a requirement, remove `bibliography.add_bibliography()` and its select, atomic update, and soft commit. The path falls from six calls to three: base post, transcription update, final soft commit.
+Replace the obsolete ancestor XPath with a lookup built from current `title/@ref` values, while retaining the existing Solr select, atomic update, and soft commit. This is the smallest application change that repairs parent-publication results, but it remains a six-request path and retains the read-after-write race.
 
-This is small, but it retains split updates, partial-state behavior, and two different document formats. It should only be chosen after confirming that parent-publication queries are intentionally unnecessary.
+Use a complete-field replacement rather than atomic `add` if this phase can be changed without disrupting the current sequence. That allows a refreshed inscription to lose a parent relationship that has been removed or corrected in `titles.xml`.
 
 ### Option B: A low-risk consolidation to three calls
 
@@ -213,13 +282,14 @@ This changes failure granularity and should preserve useful logging that identif
 
 ## Recommended implementation sequence
 
-1. **Establish the intended bibliography result.** Compare representative production Solr documents and publication pages with their TEI citations. Decide whether a child citation should also be found by its journal/corpus/series parent. Document the current flat `titles.xml` relationship rules.
-2. **Add focused bibliography tests using current-shaped data.** Include direct-only, one-parent, multi-level if supported, missing-target, and cyclic-reference cases. A test fixture should be flat and use the same reference attributes as current `titles.xml`; the existing nested test only verifies the obsolete shape.
+1. **Implement the confirmed bibliography result.** A child citation must remain findable by its own ID and must also be found through each valid parent referenced by current `titles.xml`. Normalize fragment and bare local IDs, validate their targets, and traverse with cycle protection.
+2. **Add focused bibliography tests using current-shaped data.** Include direct-only, fragment parent, bare-ID parent, nested-title reference, future multi-level, missing-target, and cyclic-reference cases. A test fixture should be flat and use the same reference attributes as current `titles.xml`; the existing nested test only verifies the obsolete shape.
 3. **Remove the Solr read.** Pass locally extracted direct IDs into bibliography calculation. This immediately eliminates the visibility race and makes the calculation a pure local operation.
 4. **Build the complete document before posting.** Insert corrected bibliography IDs and transcription into the base document and use one full-document update. Fail before posting if any required calculation fails.
 5. **Choose one commit policy with deployed Solr evidence.** Record the Solr version, update-handler/autocommit configuration, schema requirements for atomic updates, and acceptable visibility delay. Retain only the chosen mechanism.
-6. **Verify webapp behavior end to end.** Check full-text search, collection results, direct and parent publication pages, and browser-rendered inscription details.
-7. **Optimize full rebuilds separately.** Reuse parsed resources and connections first, then add bounded batch posting. Consider targeted filesystem preparation only after the indexing behavior is stable.
+6. **Rebuild existing Solr documents and verify the webapp end to end.** Check full-text search, collection results, direct and parent publication pages, and browser-rendered inscription details. In particular, parent pages such as AJA and AJP should aggregate the inscriptions currently visible only under child entries.
+7. **Make bibliography-resource changes actionable.** Ensure a changed `titles.xml` causes the affected documents—or, initially, the full index—to be rebuilt even when inscription XML is unchanged.
+8. **Optimize full rebuilds separately.** Reuse parsed resources and connections first, then add bounded batch posting. Consider targeted filesystem preparation only after the indexing behavior is stable.
 
 ## Verification criteria
 
@@ -227,7 +297,7 @@ A simplified implementation should demonstrate all of the following before repla
 
 - A representative inscription produces the same intended base Solr fields as the current `USEp_to_Solr.xsl` output.
 - Direct bibliography IDs remain present after repeated reindexing.
-- Parent bibliography IDs are either correctly present according to a documented flat-file relationship rule or intentionally absent according to a documented product decision.
+- Parent bibliography IDs are correctly present according to the documented flat-file reference rule.
 - Publication pages return inscriptions for both the direct and intended parent IDs.
 - The normalized transcription is searchable through the webapp's full-text query.
 - An inscription without an edition block receives the intended empty/missing transcription behavior.
@@ -262,6 +332,7 @@ Source data and transformations:
 
 - `../usep-data/resources/xsl/USEp_to_Solr.xsl`
 - `../usep-data/resources/xsl/transcription_index_val.xsl`
+- `../usep-data/resources/xsl/pubs.xsl`
 - `../usep-data/resources/titles.xml`
 - `../usep-data/resources/titles_old.xml`
 - Representative inscription XML under `../usep-data/xml_inscriptions/`
@@ -277,3 +348,4 @@ Public webapp:
 - `usep_app/settings_app.py`
 - `usep_app/usep_templates/display_inscription.html`
 - Search, collection, result, and publication templates
+- The live Collections, Publications, and representative parent/child publication-result pages linked in this report
