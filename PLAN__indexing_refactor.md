@@ -30,7 +30,7 @@ For an ordinary inscription refresh, the target is exactly one complete-document
 
 For a full rebuild, the same complete-document builder should feed bounded batches through one persistent `httpx.Client`. The target request count is proportional to the number of batches, not six times the number of inscriptions.
 
-This refactor must also repair publication inheritance from `titles.xml`, make index-affecting resource changes trigger rebuilding, and prove that the resulting documents satisfy search, collection, publication, image, date, language, status, and transcription behavior in the public webapp.
+This refactor must also repair publication inheritance from `titles.xml`, make index-affecting resource changes trigger rebuilding, and prove that the resulting documents satisfy search, collection, publication, image, date, language, status, and transcription behavior in the public webapp. It must preserve the existing researcher workflow in which the public `usep-data` repository's XSL stylesheets—not hard-coded indexer mappings—remain the primary way XML experts add schema-compatible indexed fields and change the browser-rendered inscription display.
 
 ## Evidence and assumptions
 
@@ -68,6 +68,21 @@ The live site was checked on 2026-07-21:
 ### Solr configuration authority
 
 The webapp repository contains `misc/schema.xml`, whose `misc/readme.md` says it tracks the schema used by the USEP Solr instance. It is old and the repository contains no corresponding production `solrconfig.xml`, so it is valuable evidence but not sufficient proof of the deployed configuration. The deployed schema, update handler, autocommit settings, and Solr version must be recorded before production rollout.
+
+### Researcher-owned transformation model
+
+The public `usep-data` repository is not merely a data input. It is an intentionally researcher-controlled transformation layer containing inscription XML, the main TEI-to-Solr XSL, the transcription XSL, the browser-display XSL, and supporting resources. XML-knowledgeable researchers can update those files together so a new element can be indexed and displayed without requiring a corresponding processor-indexer release.
+
+The refactor must preserve this division of responsibility:
+
+- `usep-data` XSL remains authoritative for the general TEI-to-Solr field mapping and browser display.
+- The indexer owns orchestration, safe parsing, cross-document bibliography expansion, complete-document assembly, Solr transport, retries, and rebuild decisions.
+- The indexer may validate the minimum front-end contract and narrowly replace fields it must derive across resources, such as completed `bib_ids`, but it must not reconstruct the whole Solr document from a Python field allowlist.
+- Every additional field emitted by the configured main XSL must pass through complete-document assembly unchanged when it is accepted by the deployed Solr schema.
+- The processor must continue mirroring the complete resource tree so newly added XSL files, imports, includes, and display resources become available without an indexer code change.
+- The indexer must load stylesheets from the freshly copied/configured `usep-data` resources for each processor run. It must not vendor a private copy of researcher-owned XSL into the application.
+
+Researcher independence is bounded by the Solr and webapp contracts. A new field that already matches an existing or dynamic Solr field can be introduced through XSL alone. A field requiring a schema change, a new server-side search control, or new Django behavior still needs a coordinated programming/operations change. The indexer itself must not create an additional approval boundary.
 
 ## Front-end consumer contract
 
@@ -108,13 +123,13 @@ The webapp currently requests `fl=*` or relies on the default field list, but th
 | `title`, `decoration` | Preserve as indexed metadata/catch-all sources unless a measured compatibility review removes them | Derived by the existing base XSL and included in the tracked schema's `text` copy-field sources |
 | `c_*` | Preserve while `char` remains the user-facing facet | Derived from `tei:g/@type` and `tei:hi/@rend`; not directly queried by the active webapp but part of the current stored representation |
 
-Additional `*_desc` fields may be retained for compatibility, but only `text_genre_desc` is read by the active result templates. The implementation should document any retained compatibility fields rather than treating every historical XSL output as permanent.
+This table is a minimum consumer contract, not a closed field allowlist. Additional schema-compatible fields emitted by the configured researcher-owned XSL must be preserved unchanged. Additional `*_desc` fields may be retained for compatibility even though only `text_genre_desc` is read by the active result templates; decisions to retire historical XSL output belong in a separately reviewed data/schema change, not implicit indexer filtering.
 
 ### Fields that are not active requirements
 
-The unused `Publications` class in `usep_app/models.py` expects `bib_ids_types`, `bib_titles`, `bib_titles_all`, and `bib_authors`, but the active publications view uses the `Publication` class, `titles.xml`, and an exact `bib_ids` query. These legacy bibliography fields are not current front-end requirements. `bib_ids_filtered` is also not used by an active view.
+The unused `Publications` class in `usep_app/models.py` expects `bib_ids_types`, `bib_titles`, `bib_titles_all`, and `bib_authors`, but the active publications view uses the `Publication` class, `titles.xml`, and an exact `bib_ids` query. These legacy bibliography fields are not minimum current front-end requirements. `bib_ids_filtered` is also not used by an active view. The refactor must nevertheless pass them through if the researcher-owned XSL emits them and the schema accepts them; this analysis is not authorization to strip stylesheet output.
 
-The tracked schema declares `place`, but the active webapp does not query or display it and the current indexing XSL does not emit it. It should not be added to the refactor without a separate product requirement.
+The tracked schema declares `place`, but the active webapp does not query or display it and the current indexing XSL does not emit it. The indexer need not require or synthesize it, but it must pass the field through if researchers add it to the indexing XSL.
 
 ### File-serving contract for detail pages
 
@@ -123,6 +138,8 @@ The refactor must not regress the preparation stage that provides:
 - `webserved_data/inscriptions/<id>.xml` for every flattened winning inscription.
 - `webserved_data/resources/titles.xml` for included bibliography data and the Publications overview.
 - `include_publicationStmt.xml`, `include_taxonomies.xml`, display/indexing XSL files, and their imported resources.
+- The entire researcher-maintained resource tree, including new stylesheet modules and assets not known when the indexer was released.
+- Researcher-authored display XSL copied without rewriting its transformation logic.
 - Relative XInclude replacements for the three known legacy absolute URLs.
 - Existing overlay precedence: `transcribed` over `metadata_only` over `bib_only` for duplicate basenames.
 
@@ -144,6 +161,8 @@ Current data also contains both `#ID` and bare `ID` forms, Unicode IDs, an unres
 
 An incremental change to `resources/titles.xml`, `USEp_to_Solr.xsl`, or `transcription_index_val.xsl` is copied to the web-served resource tree but ignored by `indexer.update_index()`. Existing Solr documents therefore retain old derived values until a manually requested full rebuild.
 
+A hard-coded list containing only today's stylesheet filenames would create a new version of the same problem. Researchers can add an imported/included stylesheet or reorganize XSL modules without an indexer deployment. Rebuild detection must therefore follow the configured indexing stylesheets' dependency graph after resources are copied, with a safe fallback that treats any uncertain `resources/xsl/` change as index-affecting. Display-only XSL changes still need immediate copying and publication even when they do not require Solr work.
+
 ### Full-text transcription is not an established contract
 
 The active search form sends user input as a `text` query. The tracked `misc/schema.xml` defines `transcription` separately but does not copy it to `text`, and the base XSL does not add transcription to `text`. A live search for an exact token visible in a transcribed detail page returned no result. The deployed schema may differ, but the refactor cannot assume that the current atomic transcription update makes transcription discoverable through the active search form.
@@ -154,7 +173,7 @@ The current full rebuild reparses `titles.xml`, reparses and recompiles XSL, rep
 
 ### Base/status and transcription predicates can diverge
 
-The base XSL treats any nonempty `ab` below the text body as evidence of transcription, while `transcription.build_transcription()` selects only `div[@type='edition']/ab`. The refactor should define status from the same edition selection that produces the searchable transcription.
+The base XSL treats any nonempty `ab` below the text body as evidence of transcription, while `transcription.build_transcription()` selects only `div[@type='edition']/ab`. The researcher-owned indexing/transcription transformations should be aligned so status and searchable transcription use the same definition. The indexer should validate that contract and report a mismatch, not silently take ownership of the general status mapping.
 
 ## Target design
 
@@ -163,22 +182,32 @@ The base XSL treats any nonempty `ab` below the text body as evidence of transcr
 For one inscription, perform these steps before any Solr update:
 
 1. Parse the flattened inscription XML once with entities disabled and network access disabled.
-2. Run the compiled base XSL transform to obtain one Solr `doc` element.
+2. Run the freshly loaded, researcher-owned base XSL transform to obtain one Solr `doc` element, preserving every field it emits.
 3. Validate that there is exactly one nonempty `id` and that it matches the filename stem.
 4. Extract and normalize direct local bibliography IDs from the parsed inscription or the transformed document.
 5. Resolve all valid `titles.xml` parent relationships from the run-scoped bibliography graph.
 6. Replace the document's complete `bib_ids` values with stable, deduplicated direct-plus-parent IDs.
 7. Build normalized transcription from the already parsed inscription using the compiled transcription XSL.
-8. Set `status` from the same edition-content decision and set or omit `transcription` accordingly.
+8. Add or omit `transcription` from the configured transcription transform, preserve the base XSL's `status`, and validate that the two outputs are consistent. Correct a mismatch in the researcher-owned transformations rather than silently replacing their general mapping in Python.
 9. Ensure the active full-text field can search transcription according to the chosen schema strategy.
-10. Validate field names, required values, multiplicity, empty-value behavior, numeric dates, and the front-end contract.
+10. Validate the minimum required values, multiplicity, empty-value behavior, numeric dates, and front-end contract without rejecting additional schema-compatible stylesheet fields.
 11. Serialize and post the complete document once.
 
 Bibliography and transcription may remain separate pure modules and use separate XSL stylesheets. They do not need separate Solr requests.
 
+### Stylesheet authority and pass-through
+
+The base XSL output is the starting document, not a disposable intermediate used to populate a fixed Python model. Complete-document assembly may inspect fields and replace the narrow derived fields documented in this plan, but it must preserve all other `<field>` elements, including unknown-to-the-indexer names, values, order, and multiplicity.
+
+The minimum-field validation layer should answer questions such as “does this document still satisfy the current webapp?” It must not answer “is this the complete list of fields researchers are allowed to create?” Field-name/type acceptance belongs to the deployed Solr schema. Where feasible, integration checks should read the schema contract rather than duplicate it as application constants.
+
+The transcription path should likewise leave transformation choices in XSL. Prefer passing the complete parsed TEI tree to the configured transcription stylesheet and moving edition selection/normalization rules that researchers may need to change into that stylesheet. If a short compatibility stage is required during migration, keep it narrow, documented, and covered by a test showing that a later stylesheet-only change can replace it.
+
+The browser-display path remains even more direct: copy the researcher-authored display stylesheets and dependencies unchanged, and do not make their publication depend on a Solr rebuild succeeding. File preparation should complete and be logged distinctly before indexing, as it is today.
+
 ### Run-scoped resources
 
-Introduce a small run-scoped resource object, with naming finalized during implementation, that owns:
+After the Git pull and resource copy, introduce a small run-scoped resource object, with naming finalized during implementation, that owns:
 
 - The parsed and compiled base XSL transformer.
 - The parsed and compiled transcription transformer.
@@ -190,7 +219,7 @@ Single-inscription refreshes create one such object for one document. Incrementa
 
 ### Document representation
 
-Use one canonical in-memory representation between transformation and posting. Keeping an `lxml` Solr `doc` element is the least disruptive option because the main XSL already emits XML and naturally represents multivalued fields. Pure helpers should provide operations such as getting, replacing, and validating named fields without contacting Solr.
+Use one canonical in-memory representation between transformation and posting. Keeping an `lxml` Solr `doc` element is the least disruptive option because the main XSL already emits XML and naturally represents multivalued and researcher-added fields. Pure helpers should provide operations such as getting, narrowly replacing, and validating named fields without contacting Solr. They must not round-trip the document through a closed Python dictionary/schema that drops unrecognized fields.
 
 Do not use atomic `add` for `bib_ids`. A full replacement must be able to remove a stale parent, a corrected direct reference, an old transcription, a former fake marker, or any other field that disappeared from source XML.
 
@@ -266,15 +295,16 @@ For ordinary inscription changes:
 
 ### Index-affecting resource changes
 
-Classify at least these paths as index-affecting global resources:
+Classify at least these resources as index-affecting globally:
 
 - `resources/titles.xml`
-- The configured main Solr XSL source and anything it imports/includes
-- The configured transcription XSL source and anything it imports/includes
+- The configured main Solr XSL source and its transitive `xsl:import`/`xsl:include` dependencies, discovered from the freshly copied stylesheets
+- The configured transcription XSL source and its transitive `xsl:import`/`xsl:include` dependencies, discovered the same way
+- Any changed path under `resources/xsl/` when dependency discovery cannot prove that it is display-only
 
-When any such resource changes, rebuild all prepared inscription documents after the single pull/copy operation. Do not perform a second Git pull or copy by calling the current top-level full-reindex workflow recursively.
+When any such resource changes, compile the current stylesheets, validate representative/all documents as appropriate, and rebuild all prepared inscription documents after the single pull/copy operation. This makes a valid researcher stylesheet change effective without an indexer release. Do not perform a second Git pull or copy by calling the current top-level full-reindex workflow recursively.
 
-Changes used only by browser display should still be copied but should not rebuild Solr unless they also affect indexed fields. Keep the resource classification explicit and tested.
+Changes proven to be used only by browser display should still be copied and published immediately but should not rebuild Solr unless they also affect indexed fields. Keep dependency discovery, the conservative fallback, and display-only behavior explicit and tested. A newly introduced import/include must work without adding its filename to indexer code.
 
 ### Full rebuilds
 
@@ -282,7 +312,7 @@ The recommended full-rebuild stages are:
 
 1. Pull source data and validate all source XML before copying or contacting Solr, preserving current behavior.
 2. Prepare the flattened/public files and XInclude references.
-3. Load run-scoped XSL, bibliography, and HTTP resources once.
+3. Load run-scoped XSL, bibliography, and HTTP resources once from the freshly copied `usep-data` resources, and record the public data-repository revision in non-sensitive logs.
 4. Build and validate complete documents locally. Prefer finishing local construction before mutation so an XML/XSL/data error cannot stop halfway through posting.
 5. Query current IDs once and compute orphan deletions.
 6. Send complete documents in a configurable bounded batch size and send orphan deletions in a bounded update rather than committing each delete.
@@ -314,22 +344,23 @@ Targeted copying for one inscription is not part of the initial indexing refacto
 
 1. Add representative flat fixtures for `bib_only`, `metadata`, and `transcription` records.
 2. Document the deployed Solr schema/configuration and compare it with the webapp's tracked `misc/schema.xml`.
-3. Add a contract test that asserts the fields required by the active webapp exist with compatible indexed/stored/multivalued definitions.
-4. Record baseline document counts, representative queries, current request counts, and full-rebuild duration in development.
+3. Add a contract test that asserts the fields required by the active webapp exist with compatible indexed/stored/multivalued definitions while allowing additional schema-compatible fields.
+4. Add a researcher-extension fixture whose base XSL emits an extra field and whose display XSL changes visible output, with no corresponding indexer code change.
+5. Record baseline document counts, representative queries, current request counts, and full-rebuild duration in development.
 
 ### Phase 1: Pure builders and titles.xml repair
 
 1. Refactor bibliography logic into pure functions that build the `titles.xml` graph and resolve complete IDs from supplied direct IDs.
-2. Change transcription building to accept an already parsed inscription tree and a compiled transformer.
-3. Add Solr-document field replacement and validation helpers.
-4. Align `status` calculation with the edition-content predicate.
-5. Keep this phase free of Solr calls so all edge cases are fast unit tests.
+2. Change transcription building to pass the already parsed inscription tree to the configured compiled transformer, minimizing hard-coded Python selection rules.
+3. Add Solr-document field inspection, narrow replacement, pass-through, and minimum-contract validation helpers.
+4. Preserve `status` from the base XSL and add a consistency check against transcription output; make any mapping correction in the researcher-owned stylesheet unless a narrow application-derived rule is explicitly justified.
+5. Keep this phase free of Solr calls so all edge cases and researcher-extension behavior are fast unit tests.
 
 ### Phase 2: One complete update
 
-1. Make `indexer.update_index_entry()` obtain or receive run-scoped resources.
+1. Make `indexer.update_index_entry()` obtain or receive run-scoped resources loaded from the freshly copied/configured `usep-data` tree.
 2. Build bibliography and transcription before posting.
-3. Post the complete document once.
+3. Post the complete document once while preserving every non-derived field emitted by the base XSL.
 4. Remove the Solr bibliography read, both atomic enrichment posts, both enrichment commits, best-effort wrappers, and `strict_enrichment` branching.
 5. Select and implement the transcription-to-full-text strategy in the development schema/core.
 
@@ -337,10 +368,10 @@ At the end of this phase, an incremental refresh must make exactly one update re
 
 ### Phase 3: Resource invalidation and shared workflows
 
-1. Add an explicit classifier for index-affecting resource paths.
+1. Add dependency-aware classification for configured indexing stylesheets and their transitive imports/includes, with a conservative `resources/xsl/` fallback.
 2. Refactor preparation so an incremental resource change can reuse the already pulled/copied data and run a full index rebuild without duplicating preparation.
-3. Treat `titles.xml` and indexing-XSL changes as full rebuild triggers.
-4. Update README and operator logging so a promoted rebuild is visible.
+3. Treat `titles.xml` and indexing-XSL dependency changes as full rebuild triggers, while publishing display-only stylesheet changes without unnecessary Solr work.
+4. Update README and operator logging so a promoted rebuild and the `usep-data` revision are visible.
 
 ### Phase 4: Full-rebuild batching and reuse
 
@@ -365,6 +396,8 @@ At the end of this phase, an incremental refresh must make exactly one update re
 Add focused tests for:
 
 - Base transform output for each of the three status classes.
+- A schema-compatible field added only to a fixture XSL surviving document assembly, enrichment, serialization, and batching unchanged.
+- Multiple values and fields unknown to the indexer retaining their values and multiplicity.
 - `id` required, unique, nonempty, and equal to filename stem.
 - Missing optional fields being omitted rather than sent as empty values.
 - Status and transcription using the same edition selection.
@@ -381,7 +414,9 @@ Add focused tests for:
 - Local bibliography/transcription failure causing zero update posts.
 - Solr failure propagating to the queue retry boundary.
 - `titles.xml` and indexing-XSL changes promoting a batch to full rebuild.
-- Browser-only resource changes not unnecessarily rebuilding Solr.
+- A newly added imported/included indexing stylesheet being discovered and its later standalone changes promoting a rebuild without an indexer filename change.
+- Browser-only stylesheet/resource changes being copied and published without unnecessarily rebuilding Solr.
+- Malformed researcher XSL failing before Solr mutation with an actionable stylesheet/data-repository revision in diagnostics.
 - Batch boundaries, deletion batching, client reuse, and request counts.
 
 ### Schema/core integration tests
@@ -389,6 +424,7 @@ Add focused tests for:
 Against a disposable development core configured like production, prove:
 
 - Every required field is accepted with the intended multiplicity and type.
+- An additional field emitted by the main XSL is accepted without an indexer code change when it matches the deployed schema or a dynamic-field rule.
 - A complete replacement removes formerly present multivalued and optional fields.
 - Repeating the same document does not accumulate duplicate `bib_ids`, `char`, `name_*`, or other multivalued data.
 - Normalized Latin and Greek transcription tokens are found through the public `text` query path.
@@ -411,6 +447,7 @@ Verify through the webapp, not only direct Solr queries:
 - A direct publication page returns its cited inscriptions.
 - A parent publication page such as `AJA` aggregates inscriptions from children such as `AJA_Dennison` and no longer returns zero incorrectly.
 - A bibliography-only detail page and a transcribed detail page still render from copied XML/XSL resources.
+- A researcher-only display-XSL fixture change alters the rendered detail output after resource publication without an indexer application change.
 - XInclude bibliography and taxonomy content still loads from the relative copied resources.
 
 ### Request-count acceptance
@@ -429,10 +466,12 @@ For a full rebuild of `N` documents with batch size `B`, document-update request
 The refactor is complete when all of the following are true:
 
 - The front-end contract is encoded in tests and documentation.
+- The configured researcher-owned XSL remains the authoritative general field mapping, and extra schema-compatible fields pass through without an indexer release.
 - Every document is complete before its only update post.
 - `titles.xml` parent relationships populate `bib_ids` correctly.
 - Transcription is discoverable through the public Full Text Search control.
 - Index-affecting resource changes rebuild dependent documents.
+- New stylesheet imports/includes are discovered dynamically, while display-only resource changes are published independently of Solr indexing.
 - Full rebuilds reuse resources and post bounded batches.
 - Existing removal, orphan reconciliation, queue retry, and public-file preparation behavior remains correct.
 - Development and production acceptance checks pass after a complete rebuild.
@@ -457,19 +496,20 @@ These do not block implementation of the pure builders and one-document tests, b
 4. Is omission of `transcription` for non-transcribed records acceptable? This plan recommends omission because full replacement removes stale values cleanly and `status` already describes availability.
 5. Who will confirm the intended target for the unresolved `HCD` parent reference and approve cleanup of other malformed bibliography pointers?
 6. What production core backup/restore procedure is approved for the mandatory rebuild?
+7. Which existing/dynamic Solr field definitions are intentionally available for researcher-added XSL output, and what is the lightweight coordination path when a genuinely new schema field is needed?
 
 ## Files expected to change
 
 Exact names may shift as responsibilities are clarified, but implementation is expected to touch:
 
-- `usep_indexer_app/lib/indexer.py`: complete-document orchestration, validation, and resource injection.
+- `usep_indexer_app/lib/indexer.py`: complete-document orchestration, minimum-contract validation, narrow derived-field replacement, and lossless pass-through of researcher XSL output.
 - `usep_indexer_app/lib/bibliography.py`: pure flat-reference graph and traversal; no Solr access.
 - `usep_indexer_app/lib/transcription.py`: parsed-tree/compiled-transformer input; no Solr access.
 - `usep_indexer_app/lib/solr_client.py`: persistent client, complete-document batches, deletion batches, and update-request options without a commit endpoint call.
-- `usep_indexer_app/lib/processor.py` and `usep_indexer_app/lib/reindex.py`: shared prepared-data workflows, resource invalidation, and run-scoped resources.
-- `usep_indexer_app/tests/`: front-end contract fixtures, builder tests, request-count tests, resource-trigger tests, and batch tests.
-- `README.md` and `AGENTS.md`: the new request pattern, resource triggers, failure boundary, and safe verification guidance.
-- `../usep-data/resources/xsl/USEp_to_Solr.xsl`: remove or align logic now owned by the complete-document builder, especially status and bibliography normalization.
+- `usep_indexer_app/lib/processor.py` and `usep_indexer_app/lib/reindex.py`: shared prepared-data workflows, dependency-aware resource invalidation, complete resource publication, and run-scoped resources loaded after copying.
+- `usep_indexer_app/tests/`: front-end contract fixtures, researcher-extension/pass-through tests, builder tests, request-count tests, dependency-trigger tests, and batch tests.
+- `README.md` and `AGENTS.md`: the new request pattern, researcher/indexer ownership boundary, resource triggers, failure boundary, and safe verification guidance.
+- `../usep-data/resources/xsl/USEp_to_Solr.xsl` and `../usep-data/resources/xsl/transcription_index_val.xsl`: remain the researcher-owned authoritative transformations; change them only where researchers approve a mapping correction needed by this migration, and do not vendor or replace their general mapping with Python.
 - `../usep-data/resources/titles.xml` and possibly `pubs.xsl`: separately reviewed canonical-reference and invalid-target corrections.
 - The authoritative Solr schema and the webapp's tracked `misc/schema.xml`: transcription-to-full-text and any field-definition alignment.
 
@@ -545,5 +585,25 @@ Tasks:
 - Save the plan to `usep_indexer_project/PLAN__indexing_refactor.md`
 
 - Before creating the plan, feel free to ask me up to three clarification questions -- if needed -- that may help you implement this goal. Thx!
+
+### Followup prompt
+
+One other important piece of context...
+
+- There is a separate, public `usep_data` github repository that researchers update with inscription-xml.
+
+- That repository also includes resources such as xsl stylesheets.
+
+- That repository is used by this processor-indexer webapp.
+
+- These stylesheets are updated by researchers. This allows the xml-knowledgeable researchers to implement changes to the webapp independently -- they do not need to contact our programming-team for every desired web-interface change.
+
+- Example: if there were some new data element they wanted indexed, they'd be able to update the stylesheet producing the solr doc. And perhaps update the stylesheet producing the front-end inscription web-display, and then begin incorporating that data-element into the inscription-xml files.
+
+Tasks:
+
+- Be sure that your improved indexing plan does not remove the ability of the researchers to perform this independent work.
+
+- Review the existing plan, and incorporate this contextual-requirement into the plan in an appropriate place(s) -- and if need be, update the plan accordingly.
 
 ---
