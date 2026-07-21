@@ -19,6 +19,8 @@ Prepared: 2026-07-21
 - [Decisions required before production](#decisions-required-before-production)
 - [Files expected to change](#files-expected-to-change)
 - [Sources reviewed](#sources-reviewed)
+- [Original prompt](#original-prompt)
+
 
 ## Outcome
 
@@ -509,3 +511,40 @@ Webapp repository:
 - Search, result, collection, publication, and inscription templates
 - `misc/schema.xml` and `misc/readme.md`
 - The public USEP site and representative search, collection, publication, and inscription pages
+
+
+## Original prompt
+
+Goal: Create a refactor-indexer report.
+
+Context:
+
+- The `usep_indexer_project/REPORT__USEP_indexing.md` report makes it clear that indexing can be significantly improved in at least two significant ways: 
+  - multiple solr http calls can be consolodated into a single http call.
+  - titles indexing needs to be updated.
+
+- Concept: The index-refactor should be driven by what is actually needed by the front-end webapp:
+  - code: `/path/to/usep_webapp_stuff/usepweb_project`.
+  - url: <https://library.brown.edu/projects/usep/>
+
+- The front-end webapp needs include the detail inscription pages for a couple of different kinds of inscriptions such as those with and without transcriptions. Most of this display, IIRC, is handled via browser-based xsl-transforms, but IIRC the urls come from solr.
+
+- The "search" pages of the front-end webapp are solr-driven.
+
+Tasks:
+
+- Examine the front-end webapp in whatever ways are useful to you: programmatically, via computer-use, etc -- to determine a list of requirements for data-elements that the indexer's processing and indexing components will need to account for.
+
+- Review `usep_indexer_project/README.md` to understand the purpose of this project.
+
+- Review `usep_indexer_project/AGENTS.md` to understand the code and coding-directives.
+
+- Review `usep_indexer_project/REPORT__USEP_indexing.md` to understand an analysis of the current indexing situation -- as well as some guidance for possible improvements.
+
+- Create a plan to refactor indexing, and address the `titlex.xml` issue.
+
+- Save the plan to `usep_indexer_project/PLAN__indexing_refactor.md`
+
+- Before creating the plan, feel free to ask me up to three clarification questions -- if needed -- that may help you implement this goal. Thx!
+
+---
