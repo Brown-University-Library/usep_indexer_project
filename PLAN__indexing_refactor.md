@@ -26,7 +26,7 @@ Prepared: 2026-07-21
 
 Refactor the indexer around one rule: build the complete Solr representation of an inscription locally, validate it against the fields the public webapp actually consumes, and only then cross the Solr boundary.
 
-For an ordinary inscription refresh, the target is one complete-document update instead of the current six-request sequence. If the deployed Solr configuration requires a separate explicit visibility request, the acceptable fallback is one document update followed by one commit request. The implementation must not read the document back from Solr, send bibliography and transcription as later atomic updates, or make intermediate fields visible.
+For an ordinary inscription refresh, the target is exactly one complete-document update instead of the current six-request sequence. The implementation must not read the document back from Solr, send bibliography and transcription as later atomic updates, or send a separate visibility/commit request.
 
 For a full rebuild, the same complete-document builder should feed bounded batches through one persistent `httpx.Client`. The target request count is proportional to the number of batches, not six times the number of inscriptions.
 
@@ -184,7 +184,7 @@ Introduce a small run-scoped resource object, with naming finalized during imple
 - The parsed and compiled transcription transformer.
 - The parsed `titles.xml` ID set and child-to-parent graph.
 - One configured `httpx.Client`.
-- The selected visibility/commit policy and batch size.
+- The selected update-request options and batch size.
 
 Single-inscription refreshes create one such object for one document. Incremental batches and full rebuilds create it once and reuse it across every document. The pipeline remains synchronous; concurrency is unnecessary to obtain the main performance gain and would complicate ordering, diagnostics, and Solr load.
 
@@ -202,9 +202,9 @@ A failed local build leaves the previous Solr document unchanged. A rejected Sol
 
 ### Solr client boundary
 
-Replace top-level `httpx.get()` and `httpx.post()` use with a focused client object that receives or owns one `httpx.Client`. It should provide complete-document batch update, ID selection for orphan reconciliation, batch deletion, and the chosen commit operation. `select_bibliography_ids()`, bibliography atomic updates, transcription atomic updates, and per-enrichment soft commits should be removed.
+Replace top-level `httpx.get()` and `httpx.post()` use with a focused client object that receives or owns one `httpx.Client`. It should provide complete-document batch update, ID selection for orphan reconciliation, and batch deletion. `select_bibliography_ids()`, bibliography atomic updates, transcription atomic updates, and all explicit commit operations should be removed.
 
-All requests retain an explicit timeout and `raise_for_status()`. Logs should identify inscription or batch IDs, document count, elapsed build/post time, and commit behavior without including Solr responses, private URLs, or source data.
+All requests retain an explicit timeout and `raise_for_status()`. Logs should identify inscription or batch IDs, document count, elapsed build/post time, and update-request options without including Solr responses, private URLs, or source data.
 
 ### Full-text strategy
 
@@ -261,7 +261,7 @@ For ordinary inscription changes:
 - Coalesce paths as today so the winning flattened file is indexed once.
 - Build and post one complete document per updated ID.
 - Delete removed IDs without per-ID hard commits; batch deletes within the job where practical.
-- Use one visibility mechanism for the completed job or its completed updates.
+- Rely on the document/delete update request and the configured Solr update-handler/autocommit behavior; do not send a separate visibility request.
 - Preserve safe repetition when the queue retries a failed batch.
 
 ### Index-affecting resource changes
@@ -286,23 +286,23 @@ The recommended full-rebuild stages are:
 4. Build and validate complete documents locally. Prefer finishing local construction before mutation so an XML/XSL/data error cannot stop halfway through posting.
 5. Query current IDs once and compute orphan deletions.
 6. Send complete documents in a configurable bounded batch size and send orphan deletions in a bounded update rather than committing each delete.
-7. Apply one intentional final visibility/durability action, or the minimum interval required by the confirmed production policy.
+7. Send no separate visibility or commit request; visibility and durability follow the options on each batch update and the confirmed Solr update-handler/autocommit configuration.
 8. Log document, batch, deletion, failure, and request counts.
 
 If holding every serialized document in memory is measured to be unsuitable, build one bounded batch at a time after a separate validation pass. Do not assume this optimization is necessary for roughly several thousand documents.
 
-### Commit policy
+### Visibility without a separate request
 
-Before implementation removes the current `commitWithin="500"` plus two soft commits, record:
+Before implementation removes the current two explicit soft commits, record:
 
 - Production Solr version.
 - Update-handler defaults.
 - Soft- and hard-autocommit configuration.
-- Whether `commitWithin` requests a soft or hard commit in that deployment.
+- Whether the existing `commitWithin` update option should be retained, changed, or removed.
 - Acceptable search-visibility delay for incremental updates.
 - Durability expectations if a full rebuild process or server fails.
 
-Then select one policy. A likely design is a configurable `commitWithin` on the single incremental update and one final explicit commit for a full rebuild, but this must be chosen from deployed evidence. There must not be multiple per-record visibility requests.
+Then select the options carried by the update request itself. An incremental refresh still sends exactly one request; a full rebuild sends only its bounded document/delete batch requests. If `commitWithin` is retained, it is an option on those update requests. Otherwise visibility follows the server's configured autocommit behavior. The client must never call a separate soft-commit or hard-commit endpoint.
 
 ### Later filesystem optimization
 
@@ -333,7 +333,7 @@ Targeted copying for one inscription is not part of the initial indexing refacto
 4. Remove the Solr bibliography read, both atomic enrichment posts, both enrichment commits, best-effort wrappers, and `strict_enrichment` branching.
 5. Select and implement the transcription-to-full-text strategy in the development schema/core.
 
-At the end of this phase, an incremental refresh must make one update request, or two total requests only when the selected commit policy requires a separate commit.
+At the end of this phase, an incremental refresh must make exactly one update request.
 
 ### Phase 3: Resource invalidation and shared workflows
 
@@ -377,7 +377,7 @@ Add focused tests for:
 - Missing target, empty `#`, external target, duplicate ID, and cyclic references.
 - Stable deduplication of direct and parent IDs.
 - Full replacement removing an old parent or transcription on reindex.
-- One complete Solr post and no bibliography select, atomic enrichment, or intermediate commit.
+- One complete Solr post and no bibliography select, atomic enrichment, or explicit commit request.
 - Local bibliography/transcription failure causing zero update posts.
 - Solr failure propagating to the queue retry boundary.
 - `titles.xml` and indexing-XSL changes promoting a batch to full rebuild.
@@ -393,7 +393,7 @@ Against a disposable development core configured like production, prove:
 - Repeating the same document does not accumulate duplicate `bib_ids`, `char`, `name_*`, or other multivalued data.
 - Normalized Latin and Greek transcription tokens are found through the public `text` query path.
 - Facets distinguish missing fields from present values, especially `fake` and the null-faceted fields.
-- The selected commit policy makes updates visible within the agreed interval.
+- The update-request/autocommit policy makes updates visible within the agreed interval without a separate commit request.
 - Batch rejection and retry behavior is understood and logged.
 
 ### Front-end acceptance checks
@@ -420,10 +420,9 @@ For an update of one inscription:
 - Zero Solr reads.
 - One complete-document update.
 - Zero atomic enrichment updates.
-- Zero intermediate commits.
-- At most one additional commit request if required by the confirmed policy.
+- Zero explicit commit or visibility requests.
 
-For a full rebuild of `N` documents with batch size `B`, document-update requests should be approximately `ceil(N / B)`, plus one ID query, bounded deletion request(s), and the selected final commit behavior. It must not scale as `6N`.
+For a full rebuild of `N` documents with batch size `B`, document-update requests should be approximately `ceil(N / B)`, plus one ID query and bounded deletion request(s). There is no final commit request. The request count must not scale as `6N`.
 
 ### Completion criteria
 
@@ -466,7 +465,7 @@ Exact names may shift as responsibilities are clarified, but implementation is e
 - `usep_indexer_app/lib/indexer.py`: complete-document orchestration, validation, and resource injection.
 - `usep_indexer_app/lib/bibliography.py`: pure flat-reference graph and traversal; no Solr access.
 - `usep_indexer_app/lib/transcription.py`: parsed-tree/compiled-transformer input; no Solr access.
-- `usep_indexer_app/lib/solr_client.py`: persistent client, complete-document batches, deletion batches, and selected commit policy.
+- `usep_indexer_app/lib/solr_client.py`: persistent client, complete-document batches, deletion batches, and update-request options without a commit endpoint call.
 - `usep_indexer_app/lib/processor.py` and `usep_indexer_app/lib/reindex.py`: shared prepared-data workflows, resource invalidation, and run-scoped resources.
 - `usep_indexer_app/tests/`: front-end contract fixtures, builder tests, request-count tests, resource-trigger tests, and batch tests.
 - `README.md` and `AGENTS.md`: the new request pattern, resource triggers, failure boundary, and safe verification guidance.
