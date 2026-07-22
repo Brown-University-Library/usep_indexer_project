@@ -1,6 +1,6 @@
 # USEP indexing refactor plan
 
-Status: proposed implementation plan
+Status: application implementation completed; external rollout checks remain
 
 Prepared: 2026-07-21
 
@@ -18,6 +18,7 @@ Prepared: 2026-07-21
 - [Deployment and rollback](#deployment-and-rollback)
 - [Decisions required before production](#decisions-required-before-production)
 - [Files expected to change](#files-expected-to-change)
+- [Implementation notes](#implementation-notes)
 - [Sources reviewed](#sources-reviewed)
 - [Original prompt](#original-prompt)
 
@@ -514,6 +515,23 @@ Exact names may shift as responsibilities are clarified, but implementation is e
 - The authoritative Solr schema and the webapp's tracked `misc/schema.xml`: transcription-to-full-text and any field-definition alignment.
 
 Because `usep-data` and the webapp are separate repositories, their changes should be separate, coordinated pull requests with an explicit deployment order.
+
+## Implementation notes
+
+Implemented in the indexer repository on 2026-07-22.
+
+- `indexer.IndexingResources` is the run-scoped resource object. It loads the configured base and transcription XSL once, parses the `titles.xml` graph once, owns one persistent `solr_client.SolrClient`, and carries the configured batch size and public data-repository revision.
+- The canonical representation is a detached `lxml` `doc` element from the base XSL. Complete-document assembly narrowly replaces `bib_ids` and `transcription`, appends normalized transcription to `text`, omits empty values for documented optional consumer fields, and preserves every other base-XSL field, order, value, and multiplicity. The optional-value cleanup was needed because current researcher XSL emits empty description fields for representative bibliography-only and metadata records. Tests include a researcher-only extension field, including an unknown empty value, to enforce the remaining pass-through boundary.
+- The full-text implementation uses the plan's explicit-document alternative rather than the recommended Solr schema `copyField`: normalized transcription is emitted as both `transcription` and an additional `text` value. This keeps the change deployable within this repository and leaves the public webapp's `text` query unchanged. A production-like Solr integration check is still required to confirm the deployed `text` field accepts the value and uses the intended analyzers.
+- The current researcher-owned transcription stylesheet expects preselected edition content. The implementation therefore retains a narrow compatibility wrapper that passes copied `div[@type='edition']/ab` elements from the already parsed inscription to the run-scoped compiled transformer, then normalizes layout whitespace. The indexer does not reproduce the stylesheet's choice/correction/original rules in Python. A future coordinated `usep-data` stylesheet change can move the edition selection into XSL and remove this wrapper.
+- Bibliography enrichment is now entirely local. Direct inscription pointers accept one optional leading `#`, preserve Unicode, reject empty/malformed/nonlocal values, retain unresolved but syntactically valid direct IDs, and recursively add stable, deduplicated parents from descendant `title/@ref` relationships. Duplicate `xml:id` values fail parsing/graph construction; unresolved references and cycles produce diagnostics without inventing corrections.
+- One ordinary inscription refresh now sends exactly one complete-document update and performs no Solr read, atomic enrichment update, or separate commit request. Full rebuilds finish local construction before their first Solr request, query IDs once, reuse one HTTP client, and send bounded document and deletion batches. Administrative orphan deletion still reports individual failed IDs, but it reuses one client and no longer embeds hard commits.
+- `SOLR_INDEX_BATCH_SIZE`, `SOLR_COMMIT_WITHIN_MS`, and `SOLR_TIMEOUT_SECONDS` were added with defaults of 100, 500, and 30. The source XSL's update wrapper is not reused; the client applies the configured `commitWithin` value to each document/delete update. The production version, update-handler, autocommit, acceptable visibility delay, and durability policy remain rollout decisions because those values are not available in this repository.
+- Incremental resource invalidation discovers transitive local `xsl:import` and `xsl:include` dependencies after the resource copy. `resources/titles.xml` and indexing dependency changes promote the already prepared batch to a full rebuild without another Git pull or copy. A stylesheet proven unrelated to either configured indexing root is treated as display-only; uncertainty about a changed stylesheet conservatively promotes the rebuild.
+- Incremental inscription changes are coalesced by flattened basename. If an upper-precedence source file is removed but a lower-precedence flattened winner remains, that winner is reindexed instead of incorrectly deleting the Solr ID.
+- The full rebuild currently holds all built `doc` elements in memory before mutation, as recommended for the present corpus size. No measured need for the plan's separate-validation/bounded-build fallback was found during repository-only testing.
+- The application test suite now has flat bibliography-only, metadata, and transcription XML fixtures; base/transcription XSL fixtures; bibliography graph edge cases; unknown-field pass-through checks; zero-request local-failure checks; exact one-request checks; resource dependency checks; batching/client-reuse checks; and queue-boundary failure checks. `uv run ./run_tests.py -v` and `uv run ruff check .` pass without `.env`, Solr, or a `usep-data` checkout. A separate read-only local check also built one current `usep-data` record from each source class with the real configured XSL/titles resources and an HTTP transport that rejected any network request.
+- No files in the sibling researcher-owned `usep-data` repository were changed. Canonical parent-reference cleanup, confirmation of the unresolved `HCD` target, and any future transcription-XSL edition-selection change remain separate reviewed work. No webapp schema repository or live Solr core was available in this workspace, so the schema/core integration tests, live front-end acceptance checks, baseline timing, production backup, deployment, and mandatory production rebuild remain operational rollout work rather than application-code changes.
 
 ## Sources reviewed
 
