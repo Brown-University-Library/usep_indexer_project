@@ -170,7 +170,11 @@ Delete IDs with no matching public XML in configured-size groups
 Move successfully handled job files to completed/
 
 A normally reported Git, copy, build, Solr-read, posting,
-or deletion failure follows the queue-failure flow. Because public files are copied first and Solr is updated in batches, a failure can occur after some changes are already live. The retry starts from the beginning and safely writes the current data again.
+or deletion failure follows the queue-failure flow.
+Because public files are copied first and Solr is updated
+in batches, a failure can occur after some changes are
+already live. The retry starts from the beginning and
+safely writes the current data again.
 ```
 
 **Narrative.** `/reindex_all/` saves a job; the web request does not rebuild. The processor checks all source XML before replacing public copies, then prepares every search record before contacting Solr. A local conversion problem therefore leaves Solr intact, although copied public files may already be newer. The index is updated in place: documents are posted in groups, then IDs with no matching XML are removed. A later Solr failure can leave earlier groups accepted; retrying safely repeats the workflow. Any valid full-reindex job selects this path for its claimed group.
