@@ -298,10 +298,11 @@ Classify each filename from the final merged public folder
                      add its ID to the deletion list
                 |
                 v
-Build and check every surviving search document locally
+Prepare and check the complete Solr record
+for each inscription whose public XML still exists
                 |
                 v
-Post the surviving documents one at a time
+Post those complete Solr records one at a time
                 |
                 v
 Delete absent IDs in configured-size groups
@@ -314,7 +315,7 @@ A filename change follows both branches:
   new filename --> build and post its new ID
 ```
 
-**Narrative.** The processor does not delete a search record merely because GitHub reports one removed path. It first rebuilds the merged public folder, where `transcribed` takes priority over `metadata_only`, which takes priority over `bib_only` for the same filename. If another version still supplies that filename, the surviving version is indexed. Only when no public XML remains is the Solr ID deleted. A rename naturally becomes deletion of the old ID and creation or replacement of the new one.
+**Narrative.** The processor does not delete a Solr record merely because GitHub reports one removed path. It first rebuilds the merged public folder, where `transcribed` takes priority over `metadata_only`, which takes priority over `bib_only` for the same filename. If another version still supplies that filename, the service prepares and checks the complete Solr record for the inscription whose public XML still exists, then sends it to Solr. Only when no public XML remains is the ID deleted. A filename change deletes the old ID and creates or replaces the new record.
 
 ## Queue recovery and failures
 
