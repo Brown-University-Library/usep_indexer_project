@@ -5,23 +5,53 @@ Filesystem/Solr comparison, response-context preparation, and best-effort deleti
 to support both the orphan administration flow and full reindexing.
 """
 
+import dataclasses
 import datetime
 import logging
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from django.conf import settings
-from usep_indexer_app.lib import solr_client
+from usep_indexer_app.lib import processor, solr_client
 
 
 log = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class OrphanReview:
+    """
+    Describes one freshly prepared manual orphan review.
+
+    Called by: prepare_orphan_review(), views.list_orphans()
+    """
+
+    orphan_ids: list[str]
+    data_revision: str
+
+
+def prepare_orphan_review() -> OrphanReview:
+    """
+    Refreshes public data and compares its inscription IDs with Solr.
+
+    Called by: views.list_orphans()
+    """
+    log.info('Manual orphan-review preparation started.')
+    data_revision = processor.prepare_public_data(validate_source_xml=True)
+    orphan_ids = prep_orphan_list()
+    log.info(
+        f'Manual orphan-review preparation completed; orphan_count, ``{len(orphan_ids)}``; '
+        f'data_revision, ``{data_revision}``'
+    )
+    review = OrphanReview(orphan_ids=orphan_ids, data_revision=data_revision)
+    return review
 
 
 def prep_orphan_list() -> list[str]:
     """
     Returns Solr IDs that have no matching web-served inscription.
 
-    Called by: views.list_orphans()
+    Called by: prepare_orphan_review()
     """
     directory_ids = build_directory_inscription_ids(settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions')
     solr_ids = build_solr_inscription_ids(settings.SOLR_URL)
@@ -76,6 +106,7 @@ def prep_context(
     orphan_ids: list[str],
     orphan_handler_url: str,
     start_time: datetime.datetime,
+    data_revision: str,
 ) -> dict[str, object]:
     """
     Builds the orphan-list response context without infrastructure locations.
@@ -86,6 +117,7 @@ def prep_context(
         'data': orphan_ids,
         'orphan_handler_url': orphan_handler_url,
         'solr_index_label': build_solr_index_label(settings.SOLR_URL),
+        'data_revision': data_revision,
         'time_taken': str(datetime.datetime.now() - start_time),
     }
     return context

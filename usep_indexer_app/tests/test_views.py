@@ -4,6 +4,7 @@ import pathlib
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
+from usep_indexer_app.lib import orphans
 
 
 class ViewTests(SimpleTestCase):
@@ -17,6 +18,10 @@ class ViewTests(SimpleTestCase):
         """
         credentials = base64.b64encode(b'test-user:test-password').decode('ascii')
         self.auth_header = {'HTTP_AUTHORIZATION': f'Basic {credentials}'}
+        processor_lock_patcher = patch('usep_indexer_app.views.spool.processor_lock')
+        self.mock_processor_lock = processor_lock_patcher.start()
+        self.addCleanup(processor_lock_patcher.stop)
+        self.mock_processor_lock.return_value.__enter__.return_value = True
 
     def test_protected_endpoint_rejects_missing_credentials(self) -> None:
         """
@@ -126,7 +131,10 @@ class ViewTests(SimpleTestCase):
         self.assertEqual(503, response.status_code)
         mock_write_event.assert_called_once()
 
-    @patch('usep_indexer_app.views.orphans.prep_orphan_list', return_value=['orphan-1'])
+    @patch(
+        'usep_indexer_app.views.orphans.prepare_orphan_review',
+        return_value=orphans.OrphanReview(orphan_ids=['orphan-1'], data_revision='abc1234'),
+    )
     def test_list_orphans_supports_json_and_signed_cookie_session(self, mock_prep) -> None:
         """
         Checks JSON output and database-free confirmation state.
@@ -134,14 +142,20 @@ class ViewTests(SimpleTestCase):
         response = self.client.get('/list_orphans/?format=json', **self.auth_header)
         self.assertEqual(200, response.status_code)
         self.assertEqual(['orphan-1'], response.json()['data'])
+        self.assertEqual('abc1234', response.json()['data_revision'])
         self.assertEqual(['orphan-1'], self.client.session['ids_to_delete'])
+        self.assertEqual('abc1234', self.client.session['orphan_data_revision'])
         mock_prep.assert_called_once_with()
+        self.mock_processor_lock.assert_called_once_with(pathlib.Path('/tmp/usep-indexer-spool-tests'))
 
     @override_settings(
         WEBSERVED_DATA_DIR_PATH=pathlib.Path('/private/deployment/usep-data'),
         SOLR_URL='https://dev-internal-solr.example.org/solr/private-core',
     )
-    @patch('usep_indexer_app.views.orphans.prep_orphan_list', return_value=['orphan-1'])
+    @patch(
+        'usep_indexer_app.views.orphans.prepare_orphan_review',
+        return_value=orphans.OrphanReview(orphan_ids=['orphan-1'], data_revision='abc1234'),
+    )
     def test_list_orphans_omits_infrastructure_details(self, mock_prep) -> None:
         """
         Checks that HTML and JSON responses do not disclose configured locations.
@@ -150,20 +164,70 @@ class ViewTests(SimpleTestCase):
         json_data = json_response.json()
         self.assertNotIn('inscriptions_dir_path', json_data)
         self.assertNotIn('solr_url', json_data)
+        self.assertEqual('abc1234', json_data['data_revision'])
         self.assertEqual('configured dev Solr index', json_data['solr_index_label'])
 
         html_response = self.client.get('/list_orphans/', **self.auth_header)
         self.assertNotContains(html_response, '/private/deployment/usep-data')
         self.assertNotContains(html_response, 'dev-internal-solr.example.org')
         self.assertContains(html_response, 'configured dev Solr index')
+        self.assertContains(html_response, 'usep-data revision abc1234')
         self.assertEqual(2, mock_prep.call_count)
+
+    @patch('usep_indexer_app.views.orphans.prepare_orphan_review')
+    def test_list_orphans_does_not_use_stale_data_while_an_update_is_active(self, mock_prepare) -> None:
+        """
+        Checks an active update prevents refreshing, comparing, or retaining old candidates.
+        """
+        session = self.client.session
+        session['ids_to_delete'] = ['stale-orphan']
+        session['orphan_data_revision'] = 'stale-revision'
+        session.save()
+        self.mock_processor_lock.return_value.__enter__.return_value = False
+
+        response = self.client.get('/list_orphans/?format=json', **self.auth_header)
+
+        self.assertEqual(409, response.status_code)
+        self.assertEqual(
+            {'detail': 'another data update is running; the orphan list was not refreshed'},
+            response.json(),
+        )
+        self.assertNotIn('ids_to_delete', self.client.session)
+        self.assertNotIn('orphan_data_revision', self.client.session)
+        mock_prepare.assert_not_called()
+
+    @patch(
+        'usep_indexer_app.views.orphans.prepare_orphan_review',
+        side_effect=RuntimeError('Git unavailable'),
+    )
+    def test_list_orphans_clears_stale_candidates_when_preparation_fails(self, mock_prepare) -> None:
+        """
+        Checks a failed refresh returns safely without retaining an older confirmation list.
+        """
+        session = self.client.session
+        session['ids_to_delete'] = ['stale-orphan']
+        session['orphan_data_revision'] = 'stale-revision'
+        session.save()
+
+        with self.assertLogs('usep_indexer_app.views', level='ERROR'):
+            response = self.client.get('/list_orphans/?format=json', **self.auth_header)
+
+        self.assertEqual(503, response.status_code)
+        self.assertEqual(
+            {'detail': 'unable to refresh current data; no orphan list was prepared'},
+            response.json(),
+        )
+        self.assertNotIn('ids_to_delete', self.client.session)
+        self.assertNotIn('orphan_data_revision', self.client.session)
+        mock_prepare.assert_called_once_with()
 
     @patch('usep_indexer_app.views.orphans.run_deletes', return_value=[])
     def test_orphan_handler_deletes_ids_from_session(self, mock_run_deletes) -> None:
         """
         Checks that the GET confirmation endpoint deletes IDs stored in the session.
         """
-        with patch('usep_indexer_app.views.orphans.prep_orphan_list', return_value=['orphan-1']):
+        review = orphans.OrphanReview(orphan_ids=['orphan-1'], data_revision='abc1234')
+        with patch('usep_indexer_app.views.orphans.prepare_orphan_review', return_value=review):
             self.client.get('/list_orphans/?format=json', **self.auth_header)
         response = self.client.get('/orphan_handler/?action_button=Yes', **self.auth_header)
         self.assertEqual(200, response.status_code)

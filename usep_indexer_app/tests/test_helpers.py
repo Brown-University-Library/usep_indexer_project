@@ -1,7 +1,7 @@
 import json
 import pathlib
 import tempfile
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from django.test import SimpleTestCase, override_settings
 from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, processor, reindex, transcription, xml_validation
@@ -135,6 +135,43 @@ class HelperTests(SimpleTestCase):
         """
         result = reindex.build_orphaned_ids(['/data/one.xml', '/data/two.xml'], ['one', 'old'])
         self.assertEqual(['old'], result)
+
+    @patch('usep_indexer_app.lib.orphans.prep_orphan_list', return_value=['orphan-1'])
+    @patch('usep_indexer_app.lib.orphans.processor.prepare_public_data', return_value='abc1234')
+    def test_orphan_review_prepares_current_public_data_before_comparison(self, mock_prepare, mock_prep_list) -> None:
+        """
+        Checks a manual review validates and publishes current source data before comparing IDs.
+        """
+        workflow = Mock()
+        workflow.attach_mock(mock_prepare, 'prepare_public_data')
+        workflow.attach_mock(mock_prep_list, 'prep_orphan_list')
+
+        review = orphans.prepare_orphan_review()
+
+        self.assertEqual(orphans.OrphanReview(orphan_ids=['orphan-1'], data_revision='abc1234'), review)
+        self.assertEqual(
+            [call.prepare_public_data(validate_source_xml=True), call.prep_orphan_list()],
+            workflow.mock_calls,
+        )
+
+    @patch('usep_indexer_app.lib.orphans.prep_orphan_list')
+    @patch(
+        'usep_indexer_app.lib.orphans.processor.prepare_public_data',
+        side_effect=RuntimeError('Git unavailable'),
+    )
+    def test_orphan_review_does_not_compare_stale_data_after_preparation_failure(
+        self,
+        mock_prepare,
+        mock_prep_list,
+    ) -> None:
+        """
+        Checks a failed refresh aborts before any filesystem-to-Solr comparison.
+        """
+        with self.assertRaisesRegex(RuntimeError, 'Git unavailable'):
+            orphans.prepare_orphan_review()
+
+        mock_prepare.assert_called_once_with(validate_source_xml=True)
+        mock_prep_list.assert_not_called()
 
     def test_single_reindex_filename_accepts_existing_id_characters_and_rejects_paths(self) -> None:
         """
@@ -294,7 +331,9 @@ class HelperTests(SimpleTestCase):
 
     @patch('usep_indexer_app.lib.reindex.indexer.build_complete_documents', side_effect=RuntimeError('bad XSL'))
     @patch('usep_indexer_app.lib.reindex.indexer.IndexingResources.load')
-    def test_prepared_full_reindex_builds_everything_before_reading_solr(self, mock_load_resources, mock_build_documents) -> None:
+    def test_prepared_full_reindex_builds_everything_before_reading_solr(
+        self, mock_load_resources, mock_build_documents
+    ) -> None:
         """
         Checks a local construction failure causes zero Solr requests during a full rebuild.
         """
