@@ -98,10 +98,15 @@ def run_deletes(ids_to_delete: list[str]) -> list[str]:
     Called by: views.delete_orphans()
     """
     errors: list[str] = []
-    for inscription_id in ids_to_delete:
-        try:
-            solr_client.delete_id(settings.SOLR_URL, inscription_id)
-        except Exception:
-            errors.append(inscription_id)
-            log.exception('Unable to delete orphan ID %s; continuing.', inscription_id)
+    with solr_client.SolrClient(
+        settings.SOLR_URL,
+        timeout=float(getattr(settings, 'SOLR_TIMEOUT_SECONDS', solr_client.DEFAULT_TIMEOUT)),
+        commit_within_ms=int(getattr(settings, 'SOLR_COMMIT_WITHIN_MS', 500)),
+    ) as client:
+        for inscription_id in ids_to_delete:
+            try:
+                client.delete_ids([inscription_id])
+            except Exception:
+                errors.append(inscription_id)
+                log.exception('Unable to delete orphan ID %s; continuing.', inscription_id)
     return errors
