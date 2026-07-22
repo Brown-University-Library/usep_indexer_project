@@ -48,6 +48,8 @@ Only after the local build succeeds does an ordinary inscription refresh send on
 
 Bibliography, transcription, document-validation, Solr-update, or deletion failures all fail the queued batch so it can be retried. A local construction failure leaves the previous Solr document unchanged. At the end of a failed processor job, the management command sends one summary email to the addresses in Django's `ADMINS` setting before exiting with an error. It does not send email for each individual inscription error.
 
+A nice visualization of the listening-processing-indexing workflows is at: [REPORT__processing_and_indexing_flows.md](https://github.com/Brown-University-Library/usep_indexer_project/blob/main/REPORT__processing_and_indexing_flows.md)
+
 
 ## Requirements
 
@@ -262,6 +264,10 @@ The `/processing_check/` response contains:
 
 ## Local HTTP listener check
 
+To observe the listener's complete HTTP-to-queue behavior locally, run the check below. It starts a temporary local web server, displays listener logging, sends both rejected and accepted requests, and verifies the queue event produced from a GitHub webhook payload. This provides a repeatable, one-command check of HTTP handling, authentication, payload parsing, and queue writing without needing to start `runserver` in one terminal and submit a separate request from another.
+
+By default, the check uses an isolated temporary spool and removes the event when it finishes. To leave the event in the configured spool for later processing, pass `--use-real-directory`. You can then run `uv run ./manage.py process_spool` separately to observe the processing stage using the application's actual data and Solr configuration. That command may also process other events already waiting in the configured spool.
+
 Run the black-box listener check from the project root:
 
 ```bash
@@ -280,4 +286,4 @@ The test settings are database-free and do not require `.env`, Solr, or a USEP c
 uv run ./run_tests.py -v
 ```
 
-See [REPORT_redis_rq_alternative.md](REPORT_redis_rq_alternative.md) for the filesystem-queue architecture, operating assumptions, implementation plan, and future decisions.
+---
