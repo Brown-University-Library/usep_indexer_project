@@ -381,7 +381,31 @@ Combine valid jobs and run one processing workflow
 Operator opens /list_orphans/
                 |
                 v
-Read IDs from public inscription filenames
+Check whether another data update is already running
+                |
+                +--> yes --> return 409 and clear old candidates
+                |
+                v
+Reserve exclusive access and continue
+                |
+                v
+Pull the latest usep-data repository
+                |
+                v
+Check every source inscription XML file
+                |
+                +--> preparation fails
+                |          |
+                |          v
+                |    return 503 and retain no candidates
+                |
+                v
+Copy resources, merge inscriptions, publish webserved_data,
+and rewrite known resource links
+                |
+                v
+Read inscription IDs from .xml filenames in the local
+webserved_data/inscriptions directory
                 |
                 v
 Read IDs currently held in Solr
@@ -390,7 +414,8 @@ Read IDs currently held in Solr
 IDs found only in Solr become orphan candidates
                 |
                 v
-Show the list and remember it for confirmation
+Show the list and selected data revision;
+remember both for confirmation
                 |
                 v
 Operator confirms deletion?
@@ -406,7 +431,7 @@ Operator confirms deletion?
                      report complete or partial success
 ```
 
-**Narrative.** A full reindex automatically removes Solr records that no longer have matching public XML. This separate legacy tool lets an operator inspect and confirm the same kind of mismatch without running a rebuild. It compares the current public files with Solr, remembers the proposed list in the browser session, and deletes only after confirmation. It does not pull data, check for another active update, or reserve exclusive access, so it should be used only when the public copy is current and no indexing work is competing.
+**Narrative.** Opening `/list_orphans/` now reserves exclusive access, pulls the latest `usep-data`, validates its XML, and rebuilds the local public copy before comparing IDs. Another active update returns 409; preparation failure returns 503. Both cases clear older confirmation state. A successful response reports the selected data revision and remembers the candidates for confirmation. Confirmation deletes that saved list without another pull or comparison. A full reindex performs equivalent cleanup automatically without manual review.
 
 ## Implementation landmarks
 

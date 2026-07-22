@@ -163,7 +163,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 ### System shape
 
 - This is a small, synchronous Django 5.2 WSGI service with three concerns: accept GitHub push notifications, durably queue work on the filesystem, and synchronize/index USEP TEI XML into Solr.
-- The web listener and the processor are deliberately separate. A successful listener response means an event was saved, not that Git, file copying, or Solr work finished.
+- The web listener and the processor are deliberately separate. A successful listener response means an event was saved, not that Git, file copying, or Solr work finished. The authenticated `/list_orphans/` administrative endpoint is a deliberate exception: it synchronously prepares current public data before comparing IDs.
 - There is intentionally no database. Do not add models, migrations, Django admin/auth/contenttypes, or database-backed sessions without an explicit architecture change. The only session use is the signed-cookie orphan-confirmation flow.
 - `config/urls.py` is the complete endpoint map; every endpoint is implemented directly in `usep_indexer_app/views.py`. Domain work belongs in `usep_indexer_app/lib/`.
 - `../usep-data/` is a separate Git repository containing the TEI source, `titles.xml`, Schematron, Oxygen Author support, and XSL resources. The indexer repository copies from it but does not own that content.
@@ -185,7 +185,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 | Searchable transcription | `usep_indexer_app/lib/transcription.py` | parsed inscription tree and the run-scoped compiled XSL configured by `TRANSCRIPTION_PARSER_XSL_PATH`; this module has no Solr access |
 | Indexing-XSL dependency discovery | `usep_indexer_app/lib/stylesheet_dependencies.py` | `processor.index_affecting_resources_changed()` and freshly copied configured stylesheets |
 | Full rebuild and stale-ID removal | `usep_indexer_app/lib/reindex.py` | `processor.py`, `indexer.py`, `orphans.py` |
-| Manual orphan listing/deletion | `usep_indexer_app/lib/orphans.py`, `views.py` | `usep_indexer_app_templates/orphan_list.html` |
+| Manual orphan listing/deletion | `usep_indexer_app/lib/orphans.py`, `views.py` | `lib/processor.py`, `lib/spool.py`, `usep_indexer_app_templates/orphan_list.html` |
 | Processor health | `usep_indexer_app/lib/processing_check_helper.py` | `spool.get_processor_health()` |
 | Public version metadata | `usep_indexer_app/lib/version_helper.py` | `.git/HEAD` and Django cache behavior |
 | Tests and supported test entry point | `run_tests.py` | `usep_indexer_app/tests/` |
@@ -203,6 +203,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 7. A change to `resources/titles.xml` or a configured indexing stylesheet/import/include promotes the already pulled/copied incremental batch to a full Solr rebuild. Dependency discovery is transitive and conservative when uncertain. A stylesheet proven unrelated to either indexing root is treated as display-only and remains published without Solr work.
 8. For each selected inscription, the run-scoped base XSL produces the starting Solr `doc`; the indexer replaces complete `bib_ids`, adds or omits normalized `transcription`, also adds transcription to `text`, omits empty documented optional consumer fields, validates the minimum contract, and preserves all other stylesheet fields. Local construction completes before that document's only update post.
 9. A full reindex builds every document locally, queries all Solr IDs once, posts bounded complete-document batches, and deletes stale IDs in bounded batches. It reuses one parsed bibliography graph, two compiled XSL transformers, and one `httpx.Client`. It updates the configured core in place; there is no alternate-core build or atomic cutover.
+10. `GET /list_orphans/` clears any earlier confirmation state, takes the same non-blocking processor lock, pulls and validates current source XML, rebuilds the copied public data, and then compares public inscription filenames with one current Solr ID read. A busy lock returns 409; a preparation/comparison failure returns 503. Successful responses store candidate IDs and the public data revision in the signed session.
 
 ### Queue lifecycle and behavior
 
@@ -241,9 +242,9 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - Incremental paths are reduced to their basename when locating a flattened inscription and deriving the Solr ID. The three source directories therefore share one filename/ID namespace.
 - Malformed GitHub JSON is intentionally acknowledged and queued as an incremental event with empty path lists. An empty-body request to `/` queues nothing, while `/force/` queues even without a body.
 - The listener validates Basic Auth but does not validate a GitHub HMAC signature. Its security depends on strong credentials and deployment behind HTTPS. Preserve compatibility unless a task explicitly changes this contract.
-- `/reindex_all/` and orphan deletion are state-changing GET flows retained for legacy compatibility. Orphan deletion relies on the preceding `/list_orphans/` response putting all candidate IDs into a signed browser cookie.
+- `/reindex_all/`, `/list_orphans/`, and orphan deletion are state-changing GET flows retained for legacy compatibility. `/list_orphans/` pulls and republishes public data before review; orphan deletion relies on that response putting all candidate IDs into a signed browser cookie.
 - `/processing_check/` compares `REMOTE_ADDR` directly with `LEGIT_IPS`; it is not proxy-header aware. `/info/`, `/version/`, and production `/error_check/` are public.
-- `/list_orphans/` deliberately omits configured filesystem and Solr locations from its HTML/JSON context. It exposes only a safe index label: Solr hostnames beginning with `d` display as dev, those beginning with `p` display as prod, and other hostnames use a neutral label. Preserve that information-disclosure boundary when changing the response context or template.
+- `/list_orphans/` deliberately omits configured filesystem and Solr locations from its HTML/JSON context. It exposes the public `usep-data` revision and a safe index label: Solr hostnames beginning with `d` display as dev, those beginning with `p` display as prod, and other hostnames use a neutral label. Preserve that information-disclosure boundary when changing the response context or template.
 - The main settings module asserts that `../.env` exists during import and loads it with `override=True`. JSON-suffixed values must be valid JSON, required email/log/cache values must exist even when not central to a command, and the log directory must already exist. Prefer absolute configured paths because unresolved relative paths depend on the process working directory. Use `config/dotenv_example_file.txt` for configuration shape, never a real outer `.env`.
 - `USE_TZ` is false for Django-facing times, while spool document timestamps are timezone-aware UTC and queue filenames are rendered in `settings.TIME_ZONE`.
 - The version endpoint reads loose `.git/HEAD` and branch-ref files directly. A deployment without `.git`, with packed refs, or with a detached head can return fallback/detached metadata; results are cached briefly.
@@ -255,7 +256,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - CI is `.github/workflows/ci_tests.yaml`; it runs `uv sync --locked --group ci_tests` and `uv run ./run_tests.py` on Ubuntu for pushes and pull requests targeting `main`.
 - `uv run ./check_web_listener.py` starts a loopback WSGI server and uses a temporary queue by default. It checks rejected and accepted Basic Auth requests without invoking the processor or external services.
 - `check_web_listener.py --use-real-directory` is not isolated: it reads selected outer `.env` values, writes the configured log, and intentionally leaves a real pending event. Use that flag only when the task calls for it.
-- Running `process_spool`, calling `/reindex_all/`, or exercising the full processor can pull the sibling Git clone, delete/mirror generated files via `rsync --delete`, consume real queued work, and modify Solr. Do not use these as routine verification without explicit authorization and a known-safe environment.
+- Running `process_spool`, calling `/reindex_all/` or `/list_orphans/`, or exercising the full processor can pull the sibling Git clone, delete/mirror generated files via `rsync --delete`, consume real queued work, or modify Solr. Do not use these as routine verification without explicit authorization and a known-safe environment.
 - Test locations follow responsibility: endpoint/auth/session behavior in `test_views.py`; XML, processor, indexer, and helper behavior in `test_helpers.py`; queue durability/retry/health in `test_spool.py`; local HTTP-check behavior in `test_check_web_listener.py`.
 
 ### Public-repository privacy boundary
