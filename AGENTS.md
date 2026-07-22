@@ -141,8 +141,9 @@ When implementing a change (especially from an issue/task):
 ### Commit messages
 
 - Group related files into logical, focused commits; do not require a separate commit for every file.
-- Keep each commit message brief, with no more than ten words.
+- Keep each commit message brief, with no more than fifteen words.
 - Write messages in the present tense so they complete the phrase "This commit..." Begin with a fitting verb such as "Adds," "Implements," or "Updates."
+- Avoid programming jargon.
 
 
 ## If instructions are missing or ambiguous
@@ -178,10 +179,11 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 | Durable queue schema and lifecycle | `usep_indexer_app/lib/spool.py` | `management/commands/process_spool.py`, `lib/processing_check_helper.py` |
 | Job-level failure email | `management/commands/process_spool.py` | `config/settings.py` for `ADMINS` and mail settings; `tests/test_spool.py` |
 | Git pull, `rsync`, and XInclude rewriting | `usep_indexer_app/lib/processor.py` | `lib/reindex.py` for the full workflow |
-| Main XML-to-Solr transformation | `usep_indexer_app/lib/indexer.py` | runtime XSL configured by `SOLR_XSL_PATH`; source copy is normally under `../usep-data/resources/xsl/` |
-| Solr HTTP requests | `usep_indexer_app/lib/solr_client.py` | callers in `indexer.py`, `bibliography.py`, `transcription.py`, and `orphans.py` |
-| Bibliography inheritance | `usep_indexer_app/lib/bibliography.py` | runtime `resources/titles.xml` and direct `bib_ids` already in Solr |
-| Searchable transcription | `usep_indexer_app/lib/transcription.py` | runtime XSL configured by `TRANSCRIPTION_PARSER_XSL_PATH` |
+| Complete XML-to-Solr document construction | `usep_indexer_app/lib/indexer.py` | runtime XSL configured by `SOLR_XSL_PATH`; source copy is normally under `../usep-data/resources/xsl/` |
+| Solr HTTP requests and batching | `usep_indexer_app/lib/solr_client.py` | run-scoped callers in `indexer.py` and `reindex.py`; administrative orphan callers in `orphans.py` |
+| Bibliography inheritance | `usep_indexer_app/lib/bibliography.py` | runtime `resources/titles.xml` and direct local publication pointers in parsed inscription XML; this module has no Solr access |
+| Searchable transcription | `usep_indexer_app/lib/transcription.py` | parsed inscription tree and the run-scoped compiled XSL configured by `TRANSCRIPTION_PARSER_XSL_PATH`; this module has no Solr access |
+| Indexing-XSL dependency discovery | `usep_indexer_app/lib/stylesheet_dependencies.py` | `processor.index_affecting_resources_changed()` and freshly copied configured stylesheets |
 | Full rebuild and stale-ID removal | `usep_indexer_app/lib/reindex.py` | `processor.py`, `indexer.py`, `orphans.py` |
 | Manual orphan listing/deletion | `usep_indexer_app/lib/orphans.py`, `views.py` | `usep_indexer_app_templates/orphan_list.html` |
 | Processor health | `usep_indexer_app/lib/processing_check_helper.py` | `spool.get_processor_health()` |
@@ -197,9 +199,10 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 3. `uv run ./manage.py process_spool` takes a non-blocking `flock`, recovers files left in `processing/`, claims a batch, quarantines malformed events, and coalesces valid events with newest-event-wins path state.
 4. Any full-reindex event in a claimed batch selects the full workflow for that entire batch. Otherwise, one incremental workflow handles the coalesced changed paths.
 5. Both workflows run `git pull`. Before a full reindex copies data or contacts Solr, it validates every source inscription XML file and fails the batch if any are malformed. Both workflows then rebuild the flattened data directories with `rsync` and rewrite three known absolute XInclude URLs in the web-served inscription copies.
-6. Incremental indexing only acts on paths containing a source-directory component in `{'bib_only', 'metadata_only', 'transcribed'}`. Full reindexing indexes every flattened `*.xml` file and removes Solr IDs absent from that filesystem set.
-7. For each selected inscription, the main XSLT produces and posts the base Solr document. Bibliography ancestors and searchable transcription are then sent as separate atomic updates.
-8. A full reindex queries all Solr IDs, deletes IDs absent from the flattened filesystem, then processes every flattened `*.xml` file in filename order. It updates the configured core in place; there is no alternate-core build or atomic cutover.
+6. Incremental indexing coalesces changed inscription paths by basename across `{'bib_only', 'metadata_only', 'transcribed'}`. After flattening, an affected basename is updated when the winning file exists and deleted only when no flattened file remains.
+7. A change to `resources/titles.xml` or a configured indexing stylesheet/import/include promotes the already pulled/copied incremental batch to a full Solr rebuild. Dependency discovery is transitive and conservative when uncertain. A stylesheet proven unrelated to either indexing root is treated as display-only and remains published without Solr work.
+8. For each selected inscription, the run-scoped base XSL produces the starting Solr `doc`; the indexer replaces complete `bib_ids`, adds or omits normalized `transcription`, also adds transcription to `text`, omits empty documented optional consumer fields, validates the minimum contract, and preserves all other stylesheet fields. Local construction completes before that document's only update post.
+9. A full reindex builds every document locally, queries all Solr IDs once, posts bounded complete-document batches, and deletes stale IDs in bounded batches. It reuses one parsed bibliography graph, two compiled XSL transformers, and one `httpx.Client`. It updates the configured core in place; there is no alternate-core build or atomic cutover.
 
 ### Queue lifecycle and behavior
 
@@ -220,20 +223,20 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - Flattening order is significant: `bib_only` first resets the temporary directory with `--delete`; `metadata_only` overlays it; `transcribed` overlays last; the flattened result then mirrors to `webserved_data/inscriptions` with `--delete`. When source directories contain the same basename, later sources win: `transcribed` over `metadata_only` over `bib_only`.
 - Resources mirror directly from the data clone to `webserved_data/resources` with `--delete`. The runtime XSL and `titles.xml` settings should point into that copied resource tree.
 - XInclude replacement is literal and limited to the three URLs in `processor.XINCLUDE_REPLACEMENTS`. It rewrites only the web-served inscription copies after flattening; it does not modify the source clone or temporary flattened copies.
-- Incremental resource-only changes are copied but ignored by `indexer.update_index()`. A change to `titles.xml`, an indexing XSL, or another resource may therefore require an explicitly queued full reindex to affect existing Solr documents.
+- Incremental resources are always copied before classification. `titles.xml` and discovered indexing-XSL dependency changes promote to a full rebuild; resources proven to be display-only are published without unnecessary Solr work. A newly added import/include is discovered from the freshly copied root stylesheet rather than a filename allowlist.
 
 ### Solr request pattern and performance
 
-- `solr_client.py` uses synchronous top-level `httpx` calls with a 30-second timeout. Requests are sequential and do not share a persistent `httpx.Client` connection.
-- The normal per-inscription path performs six Solr HTTP calls: post the base XML document, select direct bibliography IDs, post the bibliography atomic update, soft commit, post the transcription atomic update, and soft commit again.
-- The source `USEp_to_Solr.xsl` emits `<add commitWithin="500">`. Bibliography and transcription additionally request explicit soft commits; deletions include a hard commit in each request.
-- Full reindexing deletes stale IDs first and then updates every inscription one at a time. At several thousand records, request and commit count—not corpus size—is the main performance concern.
-- XML/XSL parsing and transformation are also per inscription. `bibliography.add_bibliography()` reparses `titles.xml`, and the main and transcription paths reload their XSL resources for each applicable document.
+- `solr_client.SolrClient` uses one synchronous persistent `httpx.Client` per indexing run. All requests retain an explicit configurable timeout and `raise_for_status()` behavior.
+- An ordinary one-inscription update performs zero Solr reads, one complete-document update, zero atomic enrichment updates, and zero explicit commit/visibility requests.
+- `SOLR_COMMIT_WITHIN_MS` is carried on document and delete update commands and defaults to 500 milliseconds. `SOLR_INDEX_BATCH_SIZE` defaults to 100 and bounds full-rebuild document and deletion requests. Confirm these values against deployed Solr update-handler/autocommit behavior before changing them.
+- A full rebuild builds and validates the complete local document list before its first Solr request, selects IDs once, and then posts/deletes in bounded batches. Request count scales with batches rather than inscriptions times six.
+- The base and transcription XSL transformers, `titles.xml` graph, and HTTP connection are loaded once per incremental, single-refresh, or full-rebuild run.
 
 ### Failure boundaries and compatibility gotchas
 
-- Failure of Git, `rsync`, main XML parsing/XSLT, the base Solr post, or an index deletion propagates and retries the whole claimed queue batch. Work completed before the error is not rolled back, so retries must remain safe to repeat.
-- Bibliography and transcription enrichment are best-effort: their exceptions are logged but do not fail the main inscription update, retry the event, change the job status, or individually send admin email. A job can therefore finish successfully with missing enrichment fields; inspect logs when completeness matters.
+- Failure of Git, `rsync`, XML/XSL parsing, bibliography relationship construction, transcription construction, document-contract validation, a complete Solr post, or an index deletion propagates and retries the whole claimed queue batch. There is no best-effort enrichment branch.
+- Bibliography, transcription, and validation complete before a document post, so a local construction failure leaves the preceding Solr representation unchanged. Full rebuilds finish all local document construction before querying or mutating Solr. Work successfully posted before a later HTTP failure is not rolled back, so retries must remain safe to repeat.
 - A processor result with status `failed` triggers one `mail_admins()` summary at the management-command boundary. Email delivery failure is logged and does not hide the original `CommandError`; failures before `spool.process_spool()` returns and abrupt process termination cannot use this notification path.
 - Incremental paths are reduced to their basename when locating a flattened inscription and deriving the Solr ID. The three source directories therefore share one filename/ID namespace.
 - Malformed GitHub JSON is intentionally acknowledged and queued as an incremental event with empty path lists. An empty-body request to `/` queues nothing, while `/force/` queues even without a body.
