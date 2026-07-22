@@ -65,9 +65,12 @@ HTTP "received" returns to GitHub
                 |
                 |  later: scheduled process_spool run
                 v
-Processor tries to reserve the shared processing slot
+Check whether another data update is already running
                 |
-                +--> busy --> leave queued work for a later run
+                +--> yes --> leave queued work for a later run
+                |
+                v
+Reserve exclusive access and continue
                 |
                 v
 Recover interrupted work, claim a limited-size queue batch,
@@ -118,9 +121,12 @@ Return "pull and reindex initiated"
                 |
                 |  later: scheduled process_spool run
                 v
-Try to reserve the shared processing slot
+Check whether another data update is already running
                 |
-                +--> busy --> leave the job queued for a later run
+                +--> yes --> leave the job queued for a later run
+                |
+                v
+Reserve exclusive access and continue
                 |
                 v
 Claim a queue batch
@@ -185,9 +191,12 @@ safely writes the current data again.
 Operator runs refresh_inscription INSCRIPTION_ID
                 |
                 v
-Reserve the shared processing slot
+Check whether another data update is already running
                 |
-                +--> busy --> stop; no work starts
+                +--> yes --> stop; no work starts
+                |
+                v
+Reserve exclusive access and continue
                 |
                 v
 Check that the value is an ID only,
@@ -226,7 +235,7 @@ Report success directly to the operator
 (no queue job was created)
 ```
 
-**Narrative.** Unlike webhook and full-reindex requests, this command starts immediately and never enters the queue. It uses the shared processing slot, pulls current data, and republishes the complete XML and resource set, but it rebuilds only the requested Solr record. If the ID is absent or the record cannot be prepared, no Solr update is sent; the public copies may already be newer. The command reports the error directly and has no automatic retry.
+**Narrative.** Unlike webhook and full-reindex requests, this command starts immediately and never enters the queue. It first checks for another active data update; if none is running, it reserves exclusive access, pulls current data, and republishes the complete XML and resource set. It rebuilds only the requested Solr record. If the ID is absent or the record cannot be prepared, no Solr update is sent; the public copies may already be newer. The command reports the error directly and has no automatic retry.
 
 ## Resource-file changes
 
@@ -313,9 +322,12 @@ A filename change follows both branches:
 Scheduled processor starts
                 |
                 v
-Reserve the shared processing slot
+Check whether another data update is already running
                 |
-                +--> busy --> leave queued work untouched
+                +--> yes --> leave queued work untouched
+                |
+                v
+Reserve exclusive access and continue
                 |
                 v
 Recover job files left in processing/ after an interruption,
@@ -393,14 +405,14 @@ Operator confirms deletion?
                      report complete or partial success
 ```
 
-**Narrative.** A full reindex automatically removes Solr records that no longer have matching public XML. This separate legacy tool lets an operator inspect and confirm the same kind of mismatch without running a rebuild. It compares the current public files with Solr, remembers the proposed list in the browser session, and deletes only after confirmation. It does not pull data or reserve the processor lock, so it should be used only when the public copy is current and no indexing work is competing.
+**Narrative.** A full reindex automatically removes Solr records that no longer have matching public XML. This separate legacy tool lets an operator inspect and confirm the same kind of mismatch without running a rebuild. It compares the current public files with Solr, remembers the proposed list in the browser session, and deletes only after confirmation. It does not pull data, check for another active update, or reserve exclusive access, so it should be used only when the public copy is current and no indexing work is competing.
 
 ## Implementation landmarks
 
 | Concern | Main files |
 | --- | --- |
 | Webhook and full-reindex requests | [`config/urls.py`](config/urls.py), [`usep_indexer_app/views.py`](usep_indexer_app/views.py), [`usep_indexer_app/lib/payloads.py`](usep_indexer_app/lib/payloads.py) |
-| Durable queue, locking, combining, retry, and recovery | [`usep_indexer_app/lib/spool.py`](usep_indexer_app/lib/spool.py), [`usep_indexer_app/management/commands/process_spool.py`](usep_indexer_app/management/commands/process_spool.py) |
+| Durable queue, exclusive-access control, combining, retry, and recovery | [`usep_indexer_app/lib/spool.py`](usep_indexer_app/lib/spool.py), [`usep_indexer_app/management/commands/process_spool.py`](usep_indexer_app/management/commands/process_spool.py) |
 | Git pull, copied public data, merging, and resource classification | [`usep_indexer_app/lib/processor.py`](usep_indexer_app/lib/processor.py), [`usep_indexer_app/lib/stylesheet_dependencies.py`](usep_indexer_app/lib/stylesheet_dependencies.py) |
 | Complete search-document construction | [`usep_indexer_app/lib/indexer.py`](usep_indexer_app/lib/indexer.py), [`usep_indexer_app/lib/bibliography.py`](usep_indexer_app/lib/bibliography.py), [`usep_indexer_app/lib/transcription.py`](usep_indexer_app/lib/transcription.py) |
 | Full and single-inscription rebuilds | [`usep_indexer_app/lib/reindex.py`](usep_indexer_app/lib/reindex.py), [`usep_indexer_app/management/commands/refresh_inscription.py`](usep_indexer_app/management/commands/refresh_inscription.py) |
