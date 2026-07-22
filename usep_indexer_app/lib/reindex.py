@@ -6,10 +6,12 @@ Solr with the complete filesystem corpus by removing stale document IDs.
 """
 
 import logging
+import time
 from pathlib import Path
 
 from django.conf import settings
-from usep_indexer_app.lib import indexer, orphans, processor, solr_client, xml_validation
+from lxml import etree
+from usep_indexer_app.lib import indexer, orphans, processor, xml_validation
 
 
 log = logging.getLogger(__name__)
@@ -89,6 +91,8 @@ def process_full_reindex() -> None:
     log.info('Full reindex processing started.')
     processor.call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
     log.info(f'Git pull completed; git_clone_path, ``{settings.USEP_DATA_GIT_CLONED_DIR_PATH}``')
+    data_revision = processor.read_git_revision(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
+    log.info(f'Public data revision selected; data_revision, ``{data_revision}``')
     source_inscriptions_path: Path = settings.USEP_DATA_GIT_CLONED_DIR_PATH / 'xml_inscriptions'
     validate_inscription_corpus(source_inscriptions_path)
     processor.copy_files(
@@ -103,14 +107,36 @@ def process_full_reindex() -> None:
         f'XInclude normalization completed; inscriptions_path, ``{inscriptions_path}``; '
         f'changed_file_count, ``{changed_file_count}``'
     )
-    filepaths = build_inscription_filepaths(inscriptions_path)
-    ids_to_remove = build_orphaned_ids(filepaths, solr_client.get_ids(settings.SOLR_URL))
-    log.info(
-        f'Full Solr indexing started; inscriptions_to_index_count, ``{len(filepaths)}``; '
-        f'ids_to_remove_count, ``{len(ids_to_remove)}``'
-    )
-    update_all_index_entries(filepaths, ids_to_remove)
-    log.info('Full Solr indexing completed.')
+    process_prepared_full_reindex(data_revision=data_revision)
+    return
+
+
+def process_prepared_full_reindex(*, data_revision: str = 'unavailable') -> None:
+    """
+    Rebuilds Solr from already prepared public data without another pull or copy.
+
+    Called by: process_full_reindex(), processor.process_incremental()
+    """
+    rebuild_started = time.monotonic()
+    inscriptions_path = settings.WEBSERVED_DATA_DIR_PATH / 'inscriptions'
+    inscription_paths = [Path(file_path) for file_path in build_inscription_filepaths(inscriptions_path)]
+    with indexer.IndexingResources.load(data_revision=data_revision) as resources:
+        documents = indexer.build_complete_documents(inscription_paths, resources)
+        solr_ids = resources.solr.get_ids()
+        ids_to_remove = build_orphaned_ids([str(path) for path in inscription_paths], solr_ids)
+        log.info(
+            f'Full Solr indexing started; inscriptions_to_index_count, ``{len(documents)}``; '
+            f'ids_to_remove_count, ``{len(ids_to_remove)}``; batch_size, ``{resources.batch_size}``; '
+            f'data_revision, ``{data_revision}``'
+        )
+        document_batch_count, deletion_batch_count = update_all_index_entries(documents, ids_to_remove, resources)
+        elapsed_seconds = time.monotonic() - rebuild_started
+        log.info(
+            f'Full Solr indexing completed; document_count, ``{len(documents)}``; '
+            f'document_batch_count, ``{document_batch_count}``; deletion_count, ``{len(ids_to_remove)}``; '
+            f'deletion_batch_count, ``{deletion_batch_count}``; request_count, ``{resources.solr.request_count}``; '
+            f'elapsed_seconds, ``{elapsed_seconds:.3f}``; data_revision, ``{data_revision}``'
+        )
     return
 
 
@@ -124,6 +150,8 @@ def process_single_reindex(inscription_id: str) -> Path:
     log.info(f'Single-inscription refresh started; inscription_id, ``{inscription_id}``')
     processor.call_git_pull(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
     log.info(f'Git pull completed; git_clone_path, ``{settings.USEP_DATA_GIT_CLONED_DIR_PATH}``')
+    data_revision = processor.read_git_revision(settings.USEP_DATA_GIT_CLONED_DIR_PATH)
+    log.info(f'Public data revision selected; data_revision, ``{data_revision}``')
     processor.copy_files(
         settings.USEP_DATA_GIT_CLONED_DIR_PATH,
         settings.TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH,
@@ -139,21 +167,21 @@ def process_single_reindex(inscription_id: str) -> Path:
     inscription_path = inscriptions_path / filename
     if not inscription_path.is_file():
         raise FileNotFoundError(f'No copied inscription XML exists for ID {inscription_id!r}: {inscription_path}')
-    indexer.update_index_entry(filename, strict_enrichment=True)
+    indexer.update_index_entry(filename, data_revision=data_revision)
     log.info(f'Single-inscription refresh completed; inscription_id, ``{inscription_id}``')
     return inscription_path
 
 
-def update_all_index_entries(inscriptions_to_index: list[str], ids_to_remove: list[str]) -> None:
+def update_all_index_entries(
+    documents: list[etree._Element],
+    ids_to_remove: list[str],
+    resources: indexer.IndexingResources,
+) -> tuple[int, int]:
     """
-    Applies all full-reindex updates and removals synchronously.
+    Posts complete-document batches and bounded orphan-deletion batches.
 
-    Called by: process_full_reindex()
+    Called by: process_prepared_full_reindex()
     """
-    for inscription_id in ids_to_remove:
-        log.debug(f'Removing Solr entry during full reindex; inscription_id, ``{inscription_id}``')
-        indexer.remove_entry_via_id(inscription_id)
-    for file_path in inscriptions_to_index:
-        log.debug(f'Updating Solr entry during full reindex; file_path, ``{file_path}``')
-        indexer.update_entry(file_path)
-    return
+    document_batch_count = indexer.post_document_batches(documents, resources)
+    deletion_batch_count = indexer.delete_id_batches(ids_to_remove, resources)
+    return document_batch_count, deletion_batch_count
