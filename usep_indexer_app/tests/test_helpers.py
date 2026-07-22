@@ -1,7 +1,7 @@
 import json
 import pathlib
 import tempfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase, override_settings
 from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, processor, reindex, transcription, xml_validation
@@ -50,18 +50,15 @@ class HelperTests(SimpleTestCase):
         self.assertTrue(indexer.should_index_path('xml_inscriptions/transcribed/one.xml'))
         self.assertFalse(indexer.should_index_path('resources/titles.xml'))
 
-    @patch('usep_indexer_app.lib.indexer.update_entry')
-    @patch('usep_indexer_app.lib.indexer.remove_entry')
-    def test_incremental_indexer_updates_only_inscription_paths(self, mock_remove_entry, mock_update_entry) -> None:
+    def test_incremental_indexer_coalesces_flattened_filenames(self) -> None:
         """
-        Checks synchronous updates and deletes while ignoring resource changes.
+        Checks duplicate source-directory paths become one flattened inscription update.
         """
-        indexer.update_index(
+        filenames = indexer.affected_filenames(
             ['resources/titles.xml', 'xml_inscriptions/transcribed/one.xml'],
-            ['xml_inscriptions/bib_only/two.xml'],
+            ['xml_inscriptions/metadata_only/one.xml', 'xml_inscriptions/bib_only/two.xml'],
         )
-        mock_remove_entry.assert_called_once_with('xml_inscriptions/bib_only/two.xml')
-        mock_update_entry.assert_called_once_with('xml_inscriptions/transcribed/one.xml')
+        self.assertEqual(['one.xml', 'two.xml'], filenames)
 
     def test_build_solr_document_applies_configured_xslt(self) -> None:
         """
@@ -85,90 +82,32 @@ class HelperTests(SimpleTestCase):
             solr_document = indexer.build_solr_document(inscription_path, xsl_path)
         self.assertIn('<field name="id">one</field>', solr_document)
 
-    @patch('usep_indexer_app.lib.indexer.transcription.add_transcription')
-    @patch('usep_indexer_app.lib.indexer.bibliography.add_bibliography')
-    @patch('usep_indexer_app.lib.indexer.solr_client.post_xml_update')
-    @patch('usep_indexer_app.lib.indexer.build_solr_document', return_value='<add/>')
-    def test_strict_indexing_propagates_enrichment_failures(
-        self,
-        mock_build_solr_document,
-        mock_post_xml_update,
-        mock_add_bibliography,
-        mock_add_transcription,
-    ) -> None:
+    def test_bibliography_reads_titles_xml_from_local_path(self) -> None:
         """
-        Checks strict indexing fails for either bibliography or transcription errors.
-        """
-        mock_add_bibliography.side_effect = RuntimeError('Bibliography failed')
-        with self.assertRaisesRegex(RuntimeError, 'Bibliography failed'):
-            indexer.update_index_entry('one.xml', strict_enrichment=True)
-        mock_add_transcription.assert_not_called()
-
-        mock_add_bibliography.side_effect = None
-        mock_add_transcription.side_effect = RuntimeError('Transcription failed')
-        with self.assertRaisesRegex(RuntimeError, 'Transcription failed'):
-            indexer.update_index_entry('one.xml', strict_enrichment=True)
-
-        self.assertEqual(2, mock_build_solr_document.call_count)
-        self.assertEqual(2, mock_post_xml_update.call_count)
-
-    @patch('usep_indexer_app.lib.indexer.build_solr_document', return_value='<add/>')
-    @patch('usep_indexer_app.lib.indexer.solr_client.post_xml_update', side_effect=RuntimeError('Solr down'))
-    def test_solr_post_failure_logs_source_file(self, mock_post_xml_update, mock_build_solr_document) -> None:
-        """
-        Checks a failed Solr post identifies the inscription file without hiding the original error.
-        """
-        with self.assertLogs('usep_indexer_app.lib.indexer', level='ERROR') as captured_logs:
-            with self.assertRaisesRegex(RuntimeError, 'Solr down'):
-                indexer.update_index_entry('one.xml')
-
-        joined_logs = '\n'.join(captured_logs.output)
-        expected_path = pathlib.Path('/tmp/usep-webserved-data/inscriptions/one.xml')
-        self.assertIn('Solr XML update failed; filename, ``one.xml``', joined_logs)
-        self.assertIn(f'inscription_path, ``{expected_path}``', joined_logs)
-        mock_build_solr_document.assert_called_once()
-        mock_post_xml_update.assert_called_once_with('http://solr.example.org/solr/usep', '<add/>')
-
-    @patch('usep_indexer_app.lib.bibliography.solr_client.soft_commit')
-    @patch('usep_indexer_app.lib.bibliography.solr_client.post_json_update')
-    @patch('usep_indexer_app.lib.bibliography.solr_client.select_bibliography_ids', return_value=['child'])
-    def test_bibliography_reads_titles_xml_from_local_path(
-        self,
-        mock_select_bibliography_ids,
-        mock_post_json_update,
-        mock_soft_commit,
-    ) -> None:
-        """
-        Checks that bibliography enrichment reads ancestor IDs from a local titles XML file.
+        Checks that bibliography relationships are built locally without Solr.
         """
         titles_xml = """
             <listBibl xmlns="http://www.tei-c.org/ns/1.0">
-                <bibl xml:id="parent"><bibl xml:id="child"/></bibl>
+                <bibl xml:id="parent"/>
+                <bibl xml:id="child"><title ref="#parent">Child</title></bibl>
             </listBibl>
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             titles_xml_path = pathlib.Path(temporary_directory) / 'titles.xml'
             titles_xml_path.write_text(titles_xml, encoding='utf-8')
-            result = bibliography.add_bibliography('http://solr.example.org/solr/usep', titles_xml_path, 'one')
+            graph = bibliography.load_bibliography_graph(titles_xml_path)
+        result, diagnostics = bibliography.resolve_bibliography_ids(['child'], graph)
+        self.assertEqual(['child', 'parent'], result)
+        self.assertEqual([], diagnostics)
 
-        self.assertTrue(result)
-        mock_select_bibliography_ids.assert_called_once_with('http://solr.example.org/solr/usep', 'one')
-        mock_post_json_update.assert_called_once_with(
-            'http://solr.example.org/solr/usep',
-            [{'id': 'one', 'bib_ids': {'add': ['parent']}}],
-        )
-        mock_soft_commit.assert_called_once_with('http://solr.example.org/solr/usep')
-
-    @patch('usep_indexer_app.lib.bibliography.solr_client.select_bibliography_ids')
-    def test_bibliography_rejects_missing_titles_xml_path(self, mock_select_bibliography_ids) -> None:
+    def test_bibliography_rejects_missing_titles_xml_path(self) -> None:
         """
         Checks that a missing local titles XML file raises a filesystem error before contacting Solr.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             missing_path = pathlib.Path(temporary_directory) / 'missing.xml'
             with self.assertRaises(OSError):
-                bibliography.add_bibliography('http://solr.example.org/solr/usep', missing_path, 'one')
-        mock_select_bibliography_ids.assert_not_called()
+                bibliography.load_bibliography_graph(missing_path)
 
     def test_orphan_list_is_sorted_set_difference(self) -> None:
         """
@@ -209,15 +148,16 @@ class HelperTests(SimpleTestCase):
                 with self.assertRaises(ValueError):
                     reindex.build_inscription_filename(invalid_id)
 
-    @patch('usep_indexer_app.lib.orphans.solr_client.delete_id')
-    def test_orphan_deletion_continues_after_one_failure(self, mock_delete_id) -> None:
+    @patch('usep_indexer_app.lib.orphans.solr_client.SolrClient')
+    def test_orphan_deletion_continues_after_one_failure(self, mock_client_class) -> None:
         """
         Checks the administrative delete flow reports failed IDs and continues.
         """
-        mock_delete_id.side_effect = [RuntimeError('Solr unavailable'), 'deleted']
+        mock_client = mock_client_class.return_value.__enter__.return_value
+        mock_client.delete_ids.side_effect = [RuntimeError('Solr unavailable'), 'deleted']
         errors = orphans.run_deletes(['bad-id', 'good-id'])
         self.assertEqual(['bad-id'], errors)
-        self.assertEqual(2, mock_delete_id.call_count)
+        self.assertEqual(2, mock_client.delete_ids.call_count)
 
     def test_transcription_without_an_edition_returns_empty_text(self) -> None:
         """
@@ -227,7 +167,7 @@ class HelperTests(SimpleTestCase):
             directory = pathlib.Path(temporary_directory)
             xml_path = directory / 'one.xml'
             xml_path.write_text('<TEI xmlns="http://www.tei-c.org/ns/1.0"/>', encoding='utf-8')
-            result = transcription.build_transcription(xml_path, directory / 'missing.xsl')
+            result = transcription.build_transcription(indexer.parse_inscription(xml_path), Mock())
         self.assertEqual('', result)
 
     @patch('usep_indexer_app.lib.processor.subprocess.run')
@@ -262,7 +202,7 @@ class HelperTests(SimpleTestCase):
             pathlib.Path('/tmp/usep-webserved-data'),
         )
         mock_update_xinclude.assert_called_once_with(pathlib.Path('/tmp/usep-webserved-data/inscriptions'))
-        mock_update_index.assert_called_once_with(['updated.xml'], ['removed.xml'])
+        mock_update_index.assert_called_once_with(['updated.xml'], ['removed.xml'], data_revision='unavailable')
 
     @patch('usep_indexer_app.lib.processor.indexer.update_index', side_effect=RuntimeError('Solr down'))
     @patch('usep_indexer_app.lib.processor.update_xinclude_references', return_value=2)
@@ -294,37 +234,84 @@ class HelperTests(SimpleTestCase):
         mock_update_xinclude.assert_called_once()
         mock_update_index.assert_called_once()
 
-    @patch('usep_indexer_app.lib.indexer.update_entry')
-    @patch('usep_indexer_app.lib.indexer.remove_entry')
-    def test_incremental_indexer_logs_actions_and_ignored_paths(self, mock_remove_entry, mock_update_entry) -> None:
+    @patch('usep_indexer_app.lib.reindex.process_prepared_full_reindex')
+    @patch('usep_indexer_app.lib.processor.indexer.update_index')
+    @patch('usep_indexer_app.lib.processor.index_affecting_resources_changed', return_value=True)
+    @patch('usep_indexer_app.lib.processor.read_git_revision', return_value='abc1234')
+    @patch('usep_indexer_app.lib.processor.update_xinclude_references', return_value=0)
+    @patch('usep_indexer_app.lib.processor.copy_files')
+    @patch('usep_indexer_app.lib.processor.call_git_pull')
+    def test_incremental_indexing_resource_change_rebuilds_without_second_preparation(
+        self,
+        mock_git_pull,
+        mock_copy_files,
+        mock_update_xinclude,
+        mock_read_revision,
+        mock_resource_change,
+        mock_update_index,
+        mock_process_prepared_full_reindex,
+    ) -> None:
         """
-        Checks debug logs explain which incremental paths affect Solr.
+        Checks an indexing-XSL change promotes already copied data to a full rebuild.
+        """
+        processor.process_incremental(['resources/xsl/index-module.xsl'], [])
+
+        mock_git_pull.assert_called_once()
+        mock_copy_files.assert_called_once()
+        mock_update_xinclude.assert_called_once()
+        mock_read_revision.assert_called_once()
+        mock_resource_change.assert_called_once_with(
+            ['resources/xsl/index-module.xsl'],
+            data_revision='abc1234',
+        )
+        mock_process_prepared_full_reindex.assert_called_once_with(data_revision='abc1234')
+        mock_update_index.assert_not_called()
+
+    def test_incremental_indexer_logs_ignored_paths_without_loading_resources(self) -> None:
+        """
+        Checks a display-only path is logged and causes no indexing-resource load.
         """
         with self.assertLogs('usep_indexer_app.lib.indexer', level='DEBUG') as captured_logs:
-            indexer.update_index(
-                ['resources/titles.xml', 'xml_inscriptions/transcribed/one.xml'],
-                ['xml_inscriptions/bib_only/two.xml'],
-            )
+            indexer.update_index(['resources/xsl/display.xsl'], [])
 
         joined_logs = '\n'.join(captured_logs.output)
-        self.assertIn('indexable_updated_count, ``1``', joined_logs)
-        self.assertIn('Removing Solr entry; removed_file_path, ``xml_inscriptions/bib_only/two.xml``', joined_logs)
-        self.assertIn('Ignoring non-inscription update; updated_file_path, ``resources/titles.xml``', joined_logs)
-        self.assertIn('Updating Solr entry; updated_file_path, ``xml_inscriptions/transcribed/one.xml``', joined_logs)
+        self.assertIn('affected_filename_count, ``0``', joined_logs)
+        self.assertIn('ignored_path_count, ``1``', joined_logs)
 
-    @patch('usep_indexer_app.lib.reindex.indexer.update_entry')
-    @patch('usep_indexer_app.lib.reindex.indexer.remove_entry_via_id')
-    def test_full_reindex_updates_are_synchronous(self, mock_remove_entry, mock_update_entry) -> None:
+    @patch('usep_indexer_app.lib.reindex.indexer.delete_id_batches', return_value=1)
+    @patch('usep_indexer_app.lib.reindex.indexer.post_document_batches', return_value=2)
+    def test_full_reindex_uses_bounded_document_and_deletion_batches(self, mock_post_batches, mock_delete_batches) -> None:
         """
-        Checks that full-reindex removals and updates run directly in stable order.
+        Checks full-reindex mutations use the shared batching helpers.
         """
-        reindex.update_all_index_entries(['/data/one.xml', '/data/two.xml'], ['old'])
+        resources = Mock()
+        documents = [Mock(), Mock()]
+        result = reindex.update_all_index_entries(documents, ['old'], resources)
 
-        mock_remove_entry.assert_called_once_with('old')
-        self.assertEqual([('/data/one.xml',), ('/data/two.xml',)], [call.args for call in mock_update_entry.call_args_list])
+        self.assertEqual((2, 1), result)
+        mock_post_batches.assert_called_once_with(documents, resources)
+        mock_delete_batches.assert_called_once_with(['old'], resources)
 
-    @patch('usep_indexer_app.lib.reindex.update_all_index_entries')
-    @patch('usep_indexer_app.lib.reindex.solr_client.get_ids')
+    @patch('usep_indexer_app.lib.reindex.indexer.build_complete_documents', side_effect=RuntimeError('bad XSL'))
+    @patch('usep_indexer_app.lib.reindex.indexer.IndexingResources.load')
+    def test_prepared_full_reindex_builds_everything_before_reading_solr(self, mock_load_resources, mock_build_documents) -> None:
+        """
+        Checks a local construction failure causes zero Solr requests during a full rebuild.
+        """
+        resources = mock_load_resources.return_value.__enter__.return_value
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            public_data_path = pathlib.Path(temporary_directory) / 'public-data'
+            inscriptions_path = public_data_path / 'inscriptions'
+            inscriptions_path.mkdir(parents=True)
+            (inscriptions_path / 'one.xml').write_text('<root/>', encoding='utf-8')
+            with override_settings(WEBSERVED_DATA_DIR_PATH=public_data_path):
+                with self.assertRaisesRegex(RuntimeError, 'bad XSL'):
+                    reindex.process_prepared_full_reindex(data_revision='abc1234')
+
+        mock_build_documents.assert_called_once()
+        resources.solr.get_ids.assert_not_called()
+
+    @patch('usep_indexer_app.lib.reindex.process_prepared_full_reindex')
     @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references')
     @patch('usep_indexer_app.lib.reindex.processor.copy_files')
     @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
@@ -333,8 +320,7 @@ class HelperTests(SimpleTestCase):
         mock_git_pull,
         mock_copy_files,
         mock_update_xinclude,
-        mock_get_ids,
-        mock_update_all_index_entries,
+        mock_process_prepared_full_reindex,
     ) -> None:
         """
         Checks malformed source XML stops the workflow before copying or contacting Solr.
@@ -352,11 +338,9 @@ class HelperTests(SimpleTestCase):
         mock_git_pull.assert_called_once_with(usep_data_path)
         mock_copy_files.assert_not_called()
         mock_update_xinclude.assert_not_called()
-        mock_get_ids.assert_not_called()
-        mock_update_all_index_entries.assert_not_called()
+        mock_process_prepared_full_reindex.assert_not_called()
 
-    @patch('usep_indexer_app.lib.reindex.update_all_index_entries')
-    @patch('usep_indexer_app.lib.reindex.solr_client.get_ids', return_value=[])
+    @patch('usep_indexer_app.lib.reindex.process_prepared_full_reindex')
     @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references', return_value=0)
     @patch('usep_indexer_app.lib.reindex.processor.copy_files')
     @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
@@ -365,8 +349,7 @@ class HelperTests(SimpleTestCase):
         mock_git_pull,
         mock_copy_files,
         mock_update_xinclude,
-        mock_get_ids,
-        mock_update_all_index_entries,
+        mock_process_prepared_full_reindex,
     ) -> None:
         """
         Checks a well-formed source corpus reaches the Solr reconciliation stage.
@@ -393,14 +376,13 @@ class HelperTests(SimpleTestCase):
         mock_git_pull.assert_called_once_with(usep_data_path)
         mock_copy_files.assert_called_once()
         mock_update_xinclude.assert_called_once_with(copied_inscriptions_path)
-        mock_get_ids.assert_called_once()
-        mock_update_all_index_entries.assert_called_once_with([str(copied_xml_path)], [])
+        mock_process_prepared_full_reindex.assert_called_once_with(data_revision='unavailable')
 
     @patch('usep_indexer_app.lib.reindex.indexer.update_index_entry')
     @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references', return_value=2)
     @patch('usep_indexer_app.lib.reindex.processor.copy_files')
     @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
-    def test_single_reindex_refreshes_data_and_uses_strict_indexing(
+    def test_single_reindex_refreshes_data_and_uses_complete_indexing(
         self,
         mock_git_pull,
         mock_copy_files,
@@ -408,7 +390,7 @@ class HelperTests(SimpleTestCase):
         mock_update_index_entry,
     ) -> None:
         """
-        Checks one-inscription reindexing pulls, copies, normalizes, and strictly updates Solr.
+        Checks one-inscription reindexing pulls, copies, normalizes, and completely updates Solr.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             base_path = pathlib.Path(temporary_directory)
@@ -431,7 +413,7 @@ class HelperTests(SimpleTestCase):
         mock_git_pull.assert_called_once_with(usep_data_path)
         mock_copy_files.assert_called_once_with(usep_data_path, temporary_inscriptions_path, webserved_data_path)
         mock_update_xinclude.assert_called_once_with(copied_inscriptions_path)
-        mock_update_index_entry.assert_called_once_with('one.xml', strict_enrichment=True)
+        mock_update_index_entry.assert_called_once_with('one.xml', data_revision='unavailable')
 
     @patch('usep_indexer_app.lib.reindex.indexer.update_index_entry')
     @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references', return_value=0)
