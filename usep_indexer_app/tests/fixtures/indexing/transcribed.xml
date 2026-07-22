@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <publicationStmt><idno xml:id="transcribed"/></publicationStmt>
+      <sourceDesc><listBibl><bibl><ptr type="rest-of-bibl" target="unicode-Δ"/></bibl></listBibl></sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <text><body><div type="edition"><ab>arma <name key="Marcus">virumque</name> cano</ab></div></body></text>
+</TEI>

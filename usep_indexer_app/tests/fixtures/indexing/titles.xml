@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<listBibl xmlns="http://www.tei-c.org/ns/1.0">
+  <bibl xml:id="parent"><title>Parent publication</title></bibl>
+  <bibl xml:id="child"><author><title level="j" ref="#parent">Child article</title></author></bibl>
+  <bibl xml:id="unicode-Δ"><title level="j" ref="parent">Unicode child</title></bibl>
+</listBibl>

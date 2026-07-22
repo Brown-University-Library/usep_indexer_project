@@ -1,76 +1,58 @@
 """
-Builds the searchable transcription field for an indexed inscription.
+Builds normalized searchable transcription without contacting Solr.
 
-TEI edition elements are extracted and normalized together here before an XSLT transformation turns
-them into the text sent through Solr's atomic-update interface.
+The configured researcher-owned stylesheet remains responsible for textual choices. A narrow
+compatibility wrapper supplies only edition ``ab`` elements because the current stylesheet expects
+its caller to make that selection; a future stylesheet can take over the selection directly.
 """
 
-import re
+import copy
 from pathlib import Path
 
 from lxml import etree
-from usep_indexer_app.lib import solr_client
 
 
 TEI_NAMESPACE = {'tei': 'http://www.tei-c.org/ns/1.0'}
-LB_WHITESPACE = re.compile(r'(<lb.*/>)\s+(.*)')
 
 
-def add_transcription(solr_url: str, xsl_path: Path, inscription_id: str, xml_path: Path) -> bool:
+def load_transformer(xsl_path: Path) -> etree.XSLT:
     """
-    Builds and posts the transcription field for one inscription.
+    Parses and compiles the configured transcription stylesheet.
 
-    Called by: indexer.update_transcription(), indexer.update_index_entry()
-    """
-    transcription = build_transcription(xml_path, xsl_path)
-    update_data = {
-        'add': {
-            'doc': {
-                'id': inscription_id,
-                'transcription': {'set': transcription},
-            },
-        },
-    }
-    solr_client.post_json_update(solr_url, update_data)
-    solr_client.soft_commit(solr_url)
-    return True
-
-
-def build_transcription(xml_path: Path, xsl_path: Path) -> str:
-    """
-    Extracts edition blocks and transforms them into index text.
-
-    Called by: add_transcription()
+    Called by: indexer.IndexingResources.load()
     """
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
-    inscription_xml = etree.parse(xml_path, parser=parser)
-    edition_elements = inscription_xml.xpath(
+    xsl_document = etree.parse(xsl_path, parser=parser)
+    access_control = etree.XSLTAccessControl(read_network=False, write_file=False, write_network=False)
+    transformer = etree.XSLT(xsl_document, access_control=access_control)
+    return transformer
+
+
+def build_transcription(inscription_xml: etree._ElementTree, transformer: etree.XSLT) -> str:
+    """
+    Transforms the parsed inscription's edition blocks into normalized index text.
+
+    Called by: indexer.build_complete_document()
+    """
+    edition_elements: list[etree._Element] = inscription_xml.xpath(
         "//tei:div[@type='edition']/tei:ab",
         namespaces=TEI_NAMESPACE,
     )
-    if not edition_elements:
-        return ''
+    transcription = ''
+    if edition_elements:
+        compatibility_document = etree.Element('edition-content')
+        for edition_element in edition_elements:
+            compatibility_document.append(copy.deepcopy(edition_element))
+        transformed_text = str(transformer(compatibility_document))
+        transcription = normalize_transcription(transformed_text)
+    return transcription
 
-    munged_text = munge_edition_elements(edition_elements)
-    xsl_document = etree.parse(xsl_path, parser=parser)
-    transformer = etree.XSLT(xsl_document)
-    transformed_xml = transformer(etree.fromstring(munged_text.encode('utf-8'), parser=parser))
-    return str(transformed_xml)
 
-
-def munge_edition_elements(edition_elements: list[etree._Element]) -> str:
+def normalize_transcription(transcription: str) -> str:
     """
-    Joins serialized edition elements while removing post-lb whitespace.
+    Collapses layout whitespace emitted from source XML while preserving textual tokens.
 
     Called by: build_transcription()
     """
-    munged_parts: list[str] = []
-    for element in edition_elements:
-        content = etree.tostring(element, encoding='unicode')
-        for line in content.splitlines():
-            stripped_line = line.strip()
-            match = LB_WHITESPACE.match(stripped_line)
-            if match:
-                stripped_line = match.group(1) + match.group(2)
-            munged_parts.append(stripped_line)
-    return ''.join(munged_parts)
+    normalized_transcription = ' '.join(transcription.split())
+    return normalized_transcription

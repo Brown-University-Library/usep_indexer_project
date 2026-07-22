@@ -51,19 +51,44 @@ def info(request: HttpRequest) -> JsonResponse:
 @basic_auth_required
 def list_orphans(request: HttpRequest) -> HttpResponse:
     """
-    Lists Solr IDs that have no matching web-served inscription file.
+    Refreshes public data and lists Solr IDs without a matching inscription.
 
     Called by: config.urls.urlpatterns
     """
     start_time = datetime.datetime.now()
-    orphan_ids = orphans.prep_orphan_list()
-    request.session['ids_to_delete'] = orphan_ids
-    context = orphans.prep_context(orphan_ids, reverse('orphan_handler_url'), start_time)
-
-    if request.GET.get('format') == 'json':
-        response: HttpResponse = JsonResponse(context, json_dumps_params={'indent': 2})
-    else:
-        response = render(request, 'orphan_list.html', context)
+    request.session.pop('ids_to_delete', None)
+    request.session.pop('orphan_data_revision', None)
+    response: HttpResponse
+    with spool.processor_lock(project_settings.SPOOL_ROOT_PATH) as exclusive_access_reserved:
+        if exclusive_access_reserved:
+            try:
+                review = orphans.prepare_orphan_review()
+            except Exception:
+                log.exception('Unable to refresh public data and prepare the manual orphan list.')
+                message = 'unable to refresh current data; no orphan list was prepared'
+                if request.GET.get('format') == 'json':
+                    response = JsonResponse({'detail': message}, status=503, json_dumps_params={'indent': 2})
+                else:
+                    response = HttpResponse(message, status=503)
+            else:
+                request.session['ids_to_delete'] = review.orphan_ids
+                request.session['orphan_data_revision'] = review.data_revision
+                context = orphans.prep_context(
+                    review.orphan_ids,
+                    reverse('orphan_handler_url'),
+                    start_time,
+                    review.data_revision,
+                )
+                if request.GET.get('format') == 'json':
+                    response = JsonResponse(context, json_dumps_params={'indent': 2})
+                else:
+                    response = render(request, 'orphan_list.html', context)
+        else:
+            message = 'another data update is running; the orphan list was not refreshed'
+            if request.GET.get('format') == 'json':
+                response = JsonResponse({'detail': message}, status=409, json_dumps_params={'indent': 2})
+            else:
+                response = HttpResponse(message, status=409)
     return response
 
 

@@ -38,18 +38,15 @@ There are three main parts to this webapp:
 
 The listener and processor are deliberately separate. For each accepted GitHub push, the listener gathers the added, modified, and removed paths from all commits in the payload and writes one durable JSON event under the spool's `pending/` directory. Returning a successful HTTP response means that the event was saved; the listener does not pull Git data, copy files, or contact Solr. A `reindex_all` request similarly writes one event, but uses the `full_reindex` event type and empty file lists because the complete set of inscriptions is discovered later by the processor.
 
-The processor is a Django management command intended to run on a cron schedule. It claims queued events in batches, combines their file changes, and prevents overlapping processor runs with a filesystem lock. Before indexing, it pulls the `usep_data` clone and rebuilds the flattened web-served data. A full reindex validates every source inscription after the pull and stops before copying data or contacting Solr when any XML is malformed. An incremental batch updates only the affected inscription paths, while any `full_reindex` event in a batch selects the full workflow: index every current inscription and remove Solr IDs that no longer have a corresponding XML file. Successfully handled events move to `completed/`; failures are recorded and retried up to the configured limit.
+The processor is a Django management command intended to run on a cron schedule. It claims queued events in batches, combines their file changes, and prevents overlapping processor runs with a filesystem lock. Before indexing, it pulls the `usep_data` clone and rebuilds the flattened web-served data. A full reindex validates every source inscription after the pull and stops before copying data or contacting Solr when any XML is malformed. An incremental batch updates the affected flattened inscription IDs. A change to `resources/titles.xml` or to a configured indexing stylesheet or one of its transitive local imports/includes promotes the already prepared batch to a full Solr rebuild; a resource proven to be display-only is still published without rebuilding Solr. Any `full_reindex` event in a batch also selects the full workflow. Successfully handled events move to `completed/`; failures are recorded and retried up to the configured limit.
 
-For each inscription being indexed, the normal Solr workflow makes six sequential HTTP requests:
+The manual orphan-review endpoint is a deliberate synchronous exception to the queued processing model. Before `/list_orphans/` compares public inscription filenames with Solr IDs, it reserves the same exclusive access used by the processor, pulls the latest `usep_data`, validates every source inscription XML file, rebuilds the flattened public files and resources, and rewrites known resource links. The response identifies the selected public-data revision. If another data update is active, the endpoint returns 409; if preparation fails, it returns 503. In either case it clears any older saved confirmation list rather than presenting stale candidates.
 
-1. Post the main Solr XML document produced by the indexing XSL.
-2. Query the document's direct bibliography IDs.
-3. Post an atomic update adding inherited bibliography IDs.
-4. Request a soft commit so those changes become searchable.
-5. Post an atomic update containing the searchable transcription.
-6. Request another soft commit.
+For each inscription, the indexer parses the XML once, applies the freshly copied researcher-owned base XSL, expands direct bibliography references through the run-scoped `titles.xml` graph, builds normalized transcription with the configured transcription XSL, and validates the complete document locally. Every field not narrowly derived by the indexer passes through from the base XSL unchanged, including additional schema-compatible fields added by researchers; empty values for the documented optional consumer fields are omitted instead of posted. The normalized transcription is included in both `transcription` and the active full-text `text` field so the existing public search query can find it without a coordinated webapp query change.
 
-Each request must finish before the next begins, so the indexer does not send concurrent updates. Deletions are also performed sequentially and each deletion request includes a hard commit. Bibliography and transcription enrichment are best-effort: an error in either is logged without stopping the main inscription update, whereas a failed main update or deletion fails the queued batch so it can be retried. At the end of a failed processor job, the management command sends one summary email to the addresses in Django's `ADMINS` setting before exiting with an error. It does not send email for each individual inscription error.
+Only after the local build succeeds does an ordinary inscription refresh send one complete-document Solr update. It performs no Solr read, atomic enrichment update, or separate commit/visibility request. `SOLR_COMMIT_WITHIN_MS` is carried on document and delete updates; it defaults to the legacy 500 milliseconds and must be reviewed against the deployed update-handler and durability policy. A full rebuild constructs every document before its first Solr request, reuses one persistent HTTP client and compiled/parsed resources, posts bounded document batches, and deletes stale IDs in bounded batches. `SOLR_INDEX_BATCH_SIZE` controls both batch types.
+
+Bibliography, transcription, document-validation, Solr-update, or deletion failures all fail the queued batch so it can be retried. A local construction failure leaves the previous Solr document unchanged. At the end of a failed processor job, the management command sends one summary email to the addresses in Django's `ADMINS` setting before exiting with an error. It does not send email for each individual inscription error.
 
 
 ## Requirements
@@ -134,7 +131,8 @@ Update the outer `.env` using `config/dotenv_example_file.txt` as the checklist.
 - Replace the Django secret, Basic Auth credentials, hosts, trusted origins, and IP allowlist. For ordinary local HTTP development, keep `DEBUG_JSON="true"` and `SESSION_COOKIE_SECURE_JSON="false"`.
 - Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by the user running the `./manage.py` process-command, described below.
 - Keep `SPOOL_ROOT_PATH` on durable, non-ephemeral local storage that supports atomic rename and `flock`. The application creates the queue's lifecycle subdirectories automatically.
-- Set `SOLR_URL`, `SOLR_XSL_PATH`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the appropriate local values.
+- Set `SOLR_URL`, `SOLR_XSL_PATH`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the appropriate local values. Both XSL paths should point into the freshly copied `WEBSERVED_DATA_DIR_PATH/resources` tree so researchers can deploy new mappings and local imports/includes through `usep-data`.
+- Review `SOLR_INDEX_BATCH_SIZE`, `SOLR_COMMIT_WITHIN_MS`, and `SOLR_TIMEOUT_SECONDS`. The defaults are 100 documents/IDs, 500 milliseconds, and 30 seconds. Confirm the deployed Solr update-handler/autocommit behavior before changing or removing the `commitWithin` policy.
 - Review the file-based cache, static-file, email, queue-retention, and queue-health settings. The email server sends admin notifications for web-request exceptions and failed processor jobs; its settings are required when Django loads.
 
 The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.
@@ -155,7 +153,7 @@ Run the web service:
 uv run ./manage.py runserver
 ```
 
-The web process only validates requests and writes queue files; it does not pull data or update Solr. In another terminal, process one batch of queued events:
+The webhook and full-reindex request handlers only validate requests and write queue files; they do not pull data or update Solr. The authenticated `/list_orphans/` administrative endpoint is the exception: it pulls, validates, and republishes current data synchronously before comparison. In another terminal, process one batch of queued events:
 
 ```bash
 uv run ./manage.py process_spool
@@ -192,7 +190,7 @@ uv run ./manage.py process_spool
 
 ### `refresh_inscription`
 
-Refreshes one inscription's public representation: it pulls and copies current USEP XML/resources for the browser-rendered detail page, then updates the inscription's Solr-backed search, collection, publication, metadata, and transcription data.
+Refreshes one inscription's public representation: it pulls and copies current USEP XML/resources for the browser-rendered detail page, builds and validates one complete Solr document locally, then sends exactly one Solr update for search, collection, publication, metadata, and transcription data.
 
 The argument is the inscription ID without the `.xml` extension. The command uses the same non-overlapping lock as `process_spool`, so it exits with an error if another processor is active.
 
@@ -237,14 +235,16 @@ uv run ./manage.py validate_all_xml
 | `/` | GET, POST | Basic Auth | GitHub push listener |
 | `/force/` | GET, POST | Basic Auth | Legacy manual listener trigger |
 | `/reindex_all/` | GET | Basic Auth | Enqueue full pull, copy, and reindex |
-| `/list_orphans/` | GET | Basic Auth | Compare filesystem and Solr IDs, identify the index as dev/prod without exposing configured locations; add `?format=json` for JSON |
+| `/list_orphans/` | GET | Basic Auth | Pull, validate, and republish current data under exclusive access, then compare public-file and Solr IDs; add `?format=json` for JSON |
 | `/orphan_handler/` | GET | Basic Auth | Confirm or cancel orphan deletion |
 | `/processing_check/` | GET | Source-IP allowlist | Report processor freshness and queue backlog |
 | `/info/` | GET | Public | Service metadata |
 | `/version/` | GET | Public | Git branch and commit metadata |
 | `/error_check/` | GET | Public | Raise in debug mode; return 404 otherwise |
 
-GET support and the query-driven orphan deletion flow are retained for initial compatibility. They should be tightened in a later API revision.
+GET support and the query-driven orphan deletion flow are retained for initial compatibility. `/list_orphans/` changes the local public copy before returning its review, and `/orphan_handler/` can delete confirmed Solr IDs. They should be changed to an explicit administrative POST or queued workflow in a later API revision.
+
+If `/list_orphans/` returns 409, another data update owns exclusive access and the operator should retry later. A 503 means the Git pull, source validation, public-data rebuild, or Solr comparison failed; no orphan list is retained for confirmation. Successful HTML and JSON responses include the selected public `usep-data` revision without exposing configured filesystem or Solr locations.
 
 ### Processing-check response
 
@@ -274,7 +274,7 @@ The script starts a real WSGI HTTP server on an available loopback port, sends r
 
 ## Tests
 
-The test settings are database-free and do not require `.env`, Solr, or a USEP checkout.
+The test settings are database-free and do not require `.env`, Solr, or a USEP checkout. The indexing tests use representative local XML/XSL fixtures and an in-memory HTTP transport to check complete-document request bodies and request counts.
 
 ```bash
 uv run ./run_tests.py -v

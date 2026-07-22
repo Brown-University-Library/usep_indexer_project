@@ -6,7 +6,7 @@
     </head>
     <body>
         {% if data %}
-            <p>Comparing the web-served inscription files with the {{ solr_index_label }} yielded these orphans:</p>
+            <p>After refreshing the web-served inscription files from usep-data revision {{ data_revision }}, comparison with the {{ solr_index_label }} yielded these orphans:</p>
             <ul>
                 {% for inscription_id in data %}<li>{{ inscription_id }}</li>{% endfor %}
             </ul>
@@ -18,7 +18,7 @@
                 <button type="submit" value="No" name="action_button">No</button>
             </form>
         {% else %}
-            <p>No orphans found when comparing the web-served inscription files with the {{ solr_index_label }}.</p>
+            <p>After refreshing the web-served inscription files from usep-data revision {{ data_revision }}, no orphans were found in the {{ solr_index_label }}.</p>
         {% endif %}
     </body>
 </html>

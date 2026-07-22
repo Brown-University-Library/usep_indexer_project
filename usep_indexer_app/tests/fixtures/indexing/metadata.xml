@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <publicationStmt><idno xml:id="metadata"/></publicationStmt>
+      <sourceDesc><msDesc><physDesc><objectDesc>stone</objectDesc></physDesc></msDesc></sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <text><body><div type="edition"/></body></text>
+</TEI>
