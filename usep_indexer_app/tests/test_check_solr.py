@@ -34,6 +34,24 @@ def build_schema_response() -> dict[str, object]:
     }
 
 
+def build_system_info_response() -> dict[str, object]:
+    """
+    Builds a representative Solr system-information response.
+
+    Called by: SolrCheckLibraryTests methods
+    """
+    return {
+        'responseHeader': {'status': 0, 'QTime': 1},
+        'mode': 'std',
+        'lucene': {
+            'solr-spec-version': '9.8.1',
+            'solr-impl-version': '9.8.1 test-build',
+            'lucene-spec-version': '9.12.1',
+        },
+        'system': {'name': 'Linux'},
+    }
+
+
 class SolrCheckLibraryTests(SimpleTestCase):
     """
     Checks Solr request details, responses, and active-schema parsing.
@@ -185,19 +203,53 @@ class SolrCheckLibraryTests(SimpleTestCase):
 
         handler.assert_called_once()
 
+    def test_solr_version_output_is_redirect_safe_and_records_spec_version(self) -> None:
+        """
+        Checks version retrieval preserves the full response and extracts the clean Solr version.
+        """
+        response_document = build_system_info_response()
+        handler = Mock(return_value=httpx.Response(200, json=response_document))
+        result = solr_check.retrieve_solr_version(
+            'https://solr.example.org/solr/usep',
+            5,
+            http_client=self.make_http_client(handler),
+        )
+
+        self.assertEqual('9.8.1', result.spec_version)
+        self.assertEqual(response_document, json.loads(result.full_text))
+        version_request: httpx.Request = handler.call_args.args[0]
+        self.assertEqual('/solr/usep/admin/system', version_request.url.path)
+        self.assertEqual({'wt': 'json', 'omitHeader': 'false'}, dict(version_request.url.params))
+
+    def test_solr_version_denial_is_reported_as_version_read_failure(self) -> None:
+        """
+        Checks system-information authorization failure is distinct from other Solr access.
+        """
+        handler = Mock(return_value=httpx.Response(403, json={'error': {'code': 403}}))
+
+        with self.assertRaisesRegex(solr_check.SolrCheckError, 'Solr version read returned HTTP 403'):
+            solr_check.retrieve_solr_version(
+                'https://solr.example.org/solr/usep',
+                5,
+                http_client=self.make_http_client(handler),
+            )
+
+        handler.assert_called_once()
+
 
 class CheckSolrCommandTests(SimpleTestCase):
     """
     Checks command mode selection, output, and errors.
     """
 
-    def test_help_briefly_describes_both_modes(self) -> None:
+    def test_help_briefly_describes_access_schema_and_version_modes(self) -> None:
         """
-        Checks command help remains concise while naming access and schema checks.
+        Checks command help remains concise while naming all three concerns.
         """
         self.assertLessEqual(len(Command.help.split()), 15)
         self.assertIn('access', Command.help)
         self.assertIn('schema', Command.help)
+        self.assertIn('version', Command.help)
 
     @patch('usep_indexer_app.management.commands.check_solr.solr_check.check_required_access')
     def test_default_command_reports_safe_access_success(self, mock_check_required_access) -> None:
@@ -267,3 +319,45 @@ class CheckSolrCommandTests(SimpleTestCase):
         """
         with self.assertRaisesRegex(CommandError, '--schema-format requires --schema'):
             call_command('check_solr', '--schema-format=schema.xml', stderr=io.StringIO())
+
+    @patch('usep_indexer_app.management.commands.check_solr.solr_check.retrieve_solr_version')
+    def test_version_command_writes_only_spec_version(self, mock_retrieve_solr_version) -> None:
+        """
+        Checks --solr-version prints only the Solr release number.
+        """
+        mock_retrieve_solr_version.return_value = solr_check.SolrVersionOutput(
+            spec_version='9.8.1',
+            full_text='{"unused": true}\n',
+        )
+        output = io.StringIO()
+
+        call_command('check_solr', '--solr-version', stdout=output)
+
+        mock_retrieve_solr_version.assert_called_once_with(
+            'http://solr.example.org/solr/usep',
+            30.0,
+        )
+        self.assertEqual('9.8.1\n', output.getvalue())
+
+    @patch('usep_indexer_app.management.commands.check_solr.solr_check.retrieve_solr_version')
+    def test_version_all_command_writes_only_full_response(self, mock_retrieve_solr_version) -> None:
+        """
+        Checks --solr-version-all prints the complete formatted system-information response.
+        """
+        full_text = '{\n  "lucene": {\n    "solr-spec-version": "9.8.1"\n  }\n}\n'
+        mock_retrieve_solr_version.return_value = solr_check.SolrVersionOutput(
+            spec_version='9.8.1',
+            full_text=full_text,
+        )
+        output = io.StringIO()
+
+        call_command('check_solr', '--solr-version-all', stdout=output)
+
+        self.assertEqual(full_text, output.getvalue())
+
+    def test_information_modes_cannot_be_combined(self) -> None:
+        """
+        Checks each invocation selects only one redirect-safe information mode.
+        """
+        with self.assertRaisesRegex(CommandError, 'cannot be combined'):
+            call_command('check_solr', '--schema', '--solr-version', stderr=io.StringIO())

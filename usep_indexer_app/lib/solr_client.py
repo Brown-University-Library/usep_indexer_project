@@ -2,8 +2,8 @@
 Provides the project's focused synchronous HTTP boundary to the USEP Solr core.
 
 One ``SolrClient`` owns or receives one persistent ``httpx.Client``. It handles the indexer's bounded
-query and update requests plus the management command's access and active-schema checks. Enrichment
-reads, atomic updates, and explicit commit requests do not belong at this boundary.
+query and update requests plus the management command's access, active-schema, and system-information
+checks. Enrichment reads, atomic updates, and explicit commit requests do not belong at this boundary.
 """
 
 import copy
@@ -144,6 +144,21 @@ class SolrClient:
         self.request_count += 1
         response.raise_for_status()
         return response.text
+
+    def get_system_info(self) -> object:
+        """
+        Returns Solr's system-information response as decoded JSON.
+
+        Called by: solr_check.retrieve_solr_version()
+        """
+        response = self.http_client.get(
+            f'{self.solr_url}/admin/system',
+            params={'wt': 'json', 'omitHeader': 'false'},
+            timeout=self.timeout,
+        )
+        self.request_count += 1
+        response.raise_for_status()
+        return response.json()
 
     def post_documents(self, documents: Sequence[etree._Element]) -> str:
         """
