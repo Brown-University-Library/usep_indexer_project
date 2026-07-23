@@ -147,6 +147,12 @@ uv run ./manage.py check
 uv run ./run_tests.py -v
 ```
 
+The Django configuration check and test suite do not contact Solr. Once `SOLR_URL` is reachable, run the separate Solr access check, which exercises the configured core without changing its indexed document set:
+
+```bash
+uv run ./manage.py check_solr
+```
+
 ### Run the listener and processor
 
 Run the web service:
@@ -179,6 +185,25 @@ The production processor is intended to run every other minute. The command take
 ## Management commands
 
 The application adds the following project-specific commands. Run `uv run ./manage.py help` to see these and Django's built-in commands.
+
+### `check_solr`
+
+Verifies the Solr operations required by the indexer without adding, replacing, or deleting an indexed document. With no flags, the command sends a minimal normal query to `/select`, then posts an empty delete list to `/update`. The empty command reaches the same update handler used for document and deletion requests but contains no document or ID.
+
+```bash
+uv run ./manage.py check_solr
+```
+
+A successful default check verifies connectivity plus normal query and update-handler access. It does not verify Schema API access or prove that a production-shaped USEP document satisfies the active schema.
+
+Use `--schema` to print the active schema returned by Solr rather than relying on a reference file. JSON is the default; `schema.xml` requests Solr's XML representation. Both forms verify that the active schema declares `id` as its unique-key field. Schema retrieval can require permission separate from normal query and update access.
+
+```bash
+uv run ./manage.py check_solr --schema
+uv run ./manage.py check_solr --schema --schema-format=schema.xml
+```
+
+`--schema-format` accepts `json` or `schema.xml` and requires `--schema`. Schema mode writes only schema content to standard output, so it can be redirected to a file. Solr's XML representation describes the active schema but is not necessarily byte-for-byte identical to an original schema file. If the active unique-key field is not `id`, the schema is still printed and the command then exits with an error. Treat live schema output as operational material and do not commit it to this public repository.
 
 ### `process_spool`
 

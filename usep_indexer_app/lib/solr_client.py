@@ -1,9 +1,9 @@
 """
 Provides the project's focused synchronous HTTP boundary to the USEP Solr core.
 
-One ``SolrClient`` owns or receives one persistent ``httpx.Client``. It sends only complete-document
-updates, ID selections, and delete batches; enrichment reads, atomic updates, and explicit commit
-requests do not belong at this boundary.
+One ``SolrClient`` owns or receives one persistent ``httpx.Client``. It handles the indexer's bounded
+query and update requests plus the management command's access and active-schema checks. Enrichment
+reads, atomic updates, and explicit commit requests do not belong at this boundary.
 """
 
 import copy
@@ -32,7 +32,7 @@ class SolrClient:
         """
         Configures the Solr URL, request policy, and persistent client.
 
-        Called by: indexer.IndexingResources.load(), get_ids(), orphans.run_deletes()
+        Called by: indexer.IndexingResources.load(), get_ids(), solr_check.check_required_access()
         """
         if timeout <= 0:
             raise ValueError('Solr timeout must be greater than zero.')
@@ -49,7 +49,7 @@ class SolrClient:
         """
         Returns this client for a run-scoped context.
 
-        Called by: indexing and orphan workflows
+        Called by: context-managed SolrClient callers
         """
         return self
 
@@ -86,6 +86,64 @@ class SolrClient:
         documents = response.json()['response']['docs']
         ids = sorted(document['id'] for document in documents)
         return ids
+
+    def check_read_access(self) -> object:
+        """
+        Sends the smallest normal query that exercises the indexer's read path.
+
+        Called by: solr_check.check_required_access()
+        """
+        params = {'q': '*:*', 'fl': 'id', 'rows': 1, 'wt': 'json', 'omitHeader': 'false'}
+        response = self.http_client.get(f'{self.solr_url}/select', params=params, timeout=self.timeout)
+        self.request_count += 1
+        response.raise_for_status()
+        return response.json()
+
+    def check_update_access(self) -> object:
+        """
+        Sends an empty delete list through the normal update handler.
+
+        Called by: solr_check.check_required_access()
+        """
+        response = self.http_client.post(
+            f'{self.solr_url}/update',
+            params={'wt': 'json', 'omitHeader': 'false'},
+            json={'delete': []},
+            timeout=self.timeout,
+        )
+        self.request_count += 1
+        response.raise_for_status()
+        return response.json()
+
+    def get_schema_json(self) -> object:
+        """
+        Returns the active Solr schema response as decoded JSON.
+
+        Called by: solr_check.retrieve_active_schema()
+        """
+        response = self.http_client.get(
+            f'{self.solr_url}/schema',
+            params={'wt': 'json', 'omitHeader': 'false'},
+            timeout=self.timeout,
+        )
+        self.request_count += 1
+        response.raise_for_status()
+        return response.json()
+
+    def get_schema_xml(self) -> str:
+        """
+        Returns Solr's XML representation of the active schema.
+
+        Called by: solr_check.retrieve_active_schema()
+        """
+        response = self.http_client.get(
+            f'{self.solr_url}/schema',
+            params={'wt': 'schema.xml'},
+            timeout=self.timeout,
+        )
+        self.request_count += 1
+        response.raise_for_status()
+        return response.text
 
     def post_documents(self, documents: Sequence[etree._Element]) -> str:
         """
