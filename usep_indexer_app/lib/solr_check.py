@@ -1,8 +1,8 @@
 """
-Verifies the configured Solr access and active-schema compatibility.
+Verifies the configured Solr access and reports active Solr information.
 
 The default check exercises the same query and update handlers required by the indexer without
-changing indexed documents. The optional schema mode retrieves the active schema without changing it.
+changing indexed documents. The optional schema and version modes perform read-only information requests.
 """
 
 import json
@@ -42,6 +42,16 @@ class ActiveSchemaOutput:
     unique_key: str | None
 
 
+@dataclass(frozen=True)
+class SolrVersionOutput:
+    """
+    Holds the clean Solr version and redirect-safe full system information.
+    """
+
+    spec_version: str
+    full_text: str
+
+
 class SolrCheckError(RuntimeError):
     """
     Identifies an access or active-schema verification failure.
@@ -52,7 +62,7 @@ def describe_http_error(action: str, error: httpx.HTTPError | httpx.InvalidURL) 
     """
     Builds a useful error without exposing the configured Solr location.
 
-    Called by: check_required_access(), retrieve_active_schema()
+    Called by: check_required_access(), retrieve_active_schema(), retrieve_solr_version()
     """
     if isinstance(error, httpx.HTTPStatusError):
         description = f'{action} returned HTTP {error.response.status_code}.'
@@ -248,3 +258,37 @@ def retrieve_active_schema(
         else:
             raise ValueError(f'Unsupported schema output format: {output_format}')
     return ActiveSchemaOutput(text=output_text, unique_key=unique_key)
+
+
+def retrieve_solr_version(
+    solr_url: str,
+    timeout: float,
+    *,
+    http_client: httpx.Client | None = None,
+) -> SolrVersionOutput:
+    """
+    Retrieves the Solr specification version and pretty-printed system information.
+
+    Called by: management.commands.check_solr.Command.handle_version()
+    """
+    with solr_client.SolrClient(
+        solr_url,
+        http_client=http_client,
+        timeout=timeout,
+        commit_within_ms=None,
+    ) as client:
+        try:
+            system_response = client.get_system_info()
+        except (httpx.HTTPError, httpx.InvalidURL) as error:
+            raise SolrCheckError(describe_http_error('Solr version read', error)) from error
+        except ValueError as error:
+            raise SolrCheckError('Solr version read did not return valid JSON.') from error
+    system_document = require_success_response(system_response, 'Solr version read')
+    lucene_document = system_document.get('lucene')
+    if not isinstance(lucene_document, dict):
+        raise SolrCheckError('Solr version read response is missing the lucene object.')
+    spec_version = lucene_document.get('solr-spec-version')
+    if not isinstance(spec_version, str) or not spec_version:
+        raise SolrCheckError('Solr version read response has an invalid solr-spec-version value.')
+    full_text = json.dumps(system_document, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+    return SolrVersionOutput(spec_version=spec_version, full_text=full_text)

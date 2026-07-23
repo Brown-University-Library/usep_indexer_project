@@ -203,7 +203,16 @@ uv run ./manage.py check_solr --schema
 uv run ./manage.py check_solr --schema --schema-format=schema.xml
 ```
 
-`--schema-format` accepts `json` or `schema.xml` and requires `--schema`. Schema mode writes only schema content to standard output, so it can be redirected to a file. Solr's XML representation describes the active schema but is not necessarily byte-for-byte identical to an original schema file. If the active unique-key field is not `id`, the schema is still printed and the command then exits with an error. Treat live schema output as operational material and do not commit it to this public repository.
+Use `--solr-version` to print only the running Solr release number from `solr-spec-version`. Use `--solr-version-all` to print the complete `/admin/system` response as formatted JSON.
+
+```bash
+uv run ./manage.py check_solr --solr-version
+uv run ./manage.py check_solr --solr-version-all
+```
+
+The Solr-version modes are read-only and do not run the query, update, or schema checks. Django's generic `--version` flag retains its normal meaning. Access to Solr system information can require another separate permission.
+
+`--schema-format` accepts `json` or `schema.xml` and requires `--schema`. The schema and version flags cannot be combined. Each information mode writes only its requested content to standard output, so it can be redirected to a file. Solr's XML representation describes the active schema but is not necessarily byte-for-byte identical to an original schema file. If the active unique-key field is not `id`, the schema is still printed and the command then exits with an error. Treat live schema and full system-information output as operational material and do not commit it to this public repository.
 
 ### `process_spool`
 

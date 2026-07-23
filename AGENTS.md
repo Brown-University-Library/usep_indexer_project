@@ -181,7 +181,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 | Git pull, `rsync`, and XInclude rewriting | `usep_indexer_app/lib/processor.py` | `lib/reindex.py` for the full workflow |
 | Complete XML-to-Solr document construction | `usep_indexer_app/lib/indexer.py` | runtime XSL configured by `SOLR_XSL_PATH`; source copy is normally under `../usep-data/resources/xsl/` |
 | Solr HTTP requests and batching | `usep_indexer_app/lib/solr_client.py` | run-scoped callers in `indexer.py` and `reindex.py`; administrative orphan callers in `orphans.py` |
-| Solr access verification and active-schema inspection | `usep_indexer_app/lib/solr_check.py` | `management/commands/check_solr.py`, `lib/solr_client.py`, and `tests/test_check_solr.py` |
+| Solr access verification, active-schema inspection, and version reporting | `usep_indexer_app/lib/solr_check.py` | `management/commands/check_solr.py`, `lib/solr_client.py`, and `tests/test_check_solr.py` |
 | Bibliography inheritance | `usep_indexer_app/lib/bibliography.py` | runtime `resources/titles.xml` and direct local publication pointers in parsed inscription XML; this module has no Solr access |
 | Searchable transcription | `usep_indexer_app/lib/transcription.py` | parsed inscription tree and the run-scoped compiled XSL configured by `TRANSCRIPTION_PARSER_XSL_PATH`; this module has no Solr access |
 | Indexing-XSL dependency discovery | `usep_indexer_app/lib/stylesheet_dependencies.py` | `processor.index_affecting_resources_changed()` and freshly copied configured stylesheets |
@@ -236,6 +236,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - The base and transcription XSL transformers, `titles.xml` graph, and HTTP connection are loaded once per incremental, single-refresh, or full-rebuild run.
 - `uv run ./manage.py check_solr` sends one minimal ID query through `/select`, then posts the empty JSON delete list `{"delete": []}` through `/update`. It validates both Solr responses and leaves the indexed document set unchanged. The default mode deliberately does not require Schema API access.
 - `check_solr --schema` is a separate read-only mode that prints only the active schema in JSON or Solr's `schema.xml` representation and requires its unique-key field to be `id`. Schema reads can require permission separate from ordinary query and update access.
+- `check_solr --solr-version` and `--solr-version-all` are separate read-only modes that request the core-specific `/admin/system` endpoint. The first prints only `lucene.solr-spec-version`; the second prints the complete response as formatted JSON. Django's generic `--version` retains its normal behavior. System-information access can require another distinct permission.
 
 ### Failure boundaries and compatibility gotchas
 
@@ -258,7 +259,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - Pass dotted Django test targets after `run_tests.py` for focused work, for example `uv run ./run_tests.py -v usep_indexer_app.tests.test_spool`.
 - CI is `.github/workflows/ci_tests.yaml`; it runs `uv sync --locked --group ci_tests` and `uv run ./run_tests.py` on Ubuntu for pushes and pull requests targeting `main`.
 - `uv run ./check_web_listener.py` starts a loopback WSGI server and uses a temporary queue by default. It checks rejected and accepted Basic Auth requests without invoking the processor or external services.
-- `uv run ./manage.py check_solr` contacts the configured Solr core, but its minimal query and empty update leave the indexed document set unchanged. `--schema` makes one read-only Schema API request. Neither mode pulls Git data, copies files, consumes queued work, or acquires the processor lock; do not copy live schema output into the public repository.
+- `uv run ./manage.py check_solr` contacts the configured Solr core, but its minimal query and empty update leave the indexed document set unchanged. `--schema` makes one read-only Schema API request; either version flag makes one read-only system-information request. No mode pulls Git data, copies files, consumes queued work, or acquires the processor lock; do not copy live schema or full system-information output into the public repository.
 - `check_web_listener.py --use-real-directory` is not isolated: it reads selected outer `.env` values, writes the configured log, and intentionally leaves a real pending event. Use that flag only when the task calls for it.
 - Running `process_spool`, calling `/reindex_all/` or `/list_orphans/`, or exercising the full processor can pull the sibling Git clone, delete/mirror generated files via `rsync --delete`, consume real queued work, or modify Solr. Do not use these as routine verification without explicit authorization and a known-safe environment.
 - Test locations follow responsibility: endpoint/auth/session behavior in `test_views.py`; XML, processor, indexer, and helper behavior in `test_helpers.py`; queue durability/retry/health in `test_spool.py`; local HTTP-check behavior in `test_check_web_listener.py`; Solr access and schema checks in `test_check_solr.py`.
