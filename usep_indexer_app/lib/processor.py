@@ -102,7 +102,11 @@ def update_xinclude_references(inscriptions_path: Path) -> int:
     """
     changed_file_count = 0
     for inscription_path in sorted(inscriptions_path.glob('*.xml')):
-        original_xml = inscription_path.read_text(encoding='utf-8')
+        try:
+            original_xml = inscription_path.read_text(encoding='utf-8')
+        except UnicodeError as error:
+            log.warning(f'Unable to rewrite inscription includes; filename, ``{inscription_path.name}``; error, ``{error}``')
+            continue
         updated_xml = rewrite_xinclude_text(original_xml)
         if updated_xml != original_xml:
             inscription_path.write_text(updated_xml, encoding='utf-8')

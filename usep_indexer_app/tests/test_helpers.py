@@ -3,8 +3,10 @@ import pathlib
 import tempfile
 from unittest.mock import Mock, call, patch
 
+from django.http import HttpResponse
 from django.test import SimpleTestCase, override_settings
-from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, processor, reindex, transcription, xml_validation
+from lxml import etree
+from usep_indexer_app.lib import bibliography, indexer, orphans, payloads, processor, reindex, transcription
 
 
 class HelperTests(SimpleTestCase):
@@ -322,7 +324,8 @@ class HelperTests(SimpleTestCase):
         Checks full-reindex mutations use the shared batching helpers.
         """
         resources = Mock()
-        documents = [Mock(), Mock()]
+        resources.document_failures = []
+        documents = [etree.Element('doc'), etree.Element('doc')]
         result = reindex.update_all_index_entries(documents, ['old'], resources)
 
         self.assertEqual((2, 1), result)
@@ -354,7 +357,7 @@ class HelperTests(SimpleTestCase):
     @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references')
     @patch('usep_indexer_app.lib.reindex.processor.copy_files')
     @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
-    def test_full_reindex_validates_corpus_before_copying_or_contacting_solr(
+    def test_full_reindex_leaves_individual_xml_failures_to_the_indexer(
         self,
         mock_git_pull,
         mock_copy_files,
@@ -362,7 +365,7 @@ class HelperTests(SimpleTestCase):
         mock_process_prepared_full_reindex,
     ) -> None:
         """
-        Checks malformed source XML stops the workflow before copying or contacting Solr.
+        Checks malformed source XML does not prevent the per-inscription indexing stage.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             usep_data_path = pathlib.Path(temporary_directory) / 'usep-data'
@@ -371,19 +374,18 @@ class HelperTests(SimpleTestCase):
             (inscriptions_path / 'broken.xml').write_bytes(b'<root><child></root>')
 
             with override_settings(USEP_DATA_GIT_CLONED_DIR_PATH=usep_data_path):
-                with self.assertRaisesRegex(xml_validation.XMLNotWellFormedError, 'transcribed/broken.xml'):
-                    reindex.process_full_reindex()
+                reindex.process_full_reindex()
 
         mock_git_pull.assert_called_once_with(usep_data_path)
-        mock_copy_files.assert_not_called()
-        mock_update_xinclude.assert_not_called()
-        mock_process_prepared_full_reindex.assert_not_called()
+        mock_copy_files.assert_called_once()
+        mock_update_xinclude.assert_called_once()
+        mock_process_prepared_full_reindex.assert_called_once_with(data_revision='unavailable')
 
     @patch('usep_indexer_app.lib.reindex.process_prepared_full_reindex')
     @patch('usep_indexer_app.lib.reindex.processor.update_xinclude_references', return_value=0)
     @patch('usep_indexer_app.lib.reindex.processor.copy_files')
     @patch('usep_indexer_app.lib.reindex.processor.call_git_pull')
-    def test_full_reindex_continues_after_successful_corpus_validation(
+    def test_full_reindex_prepares_public_data_before_indexing(
         self,
         mock_git_pull,
         mock_copy_files,
@@ -498,6 +500,7 @@ class HelperTests(SimpleTestCase):
             (branch_dir / 'main').write_text('abc123\n', encoding='utf-8')
             with override_settings(BASE_DIR=base_dir):
                 response = self.client.get('/version/')
+        assert isinstance(response, HttpResponse)
         self.assertEqual('main abc123', json.loads(response.content)['response']['version'])
 
 

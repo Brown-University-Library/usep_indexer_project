@@ -10,7 +10,7 @@ import copy
 import logging
 import time
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -75,6 +75,12 @@ class SolrDocumentValidationError(ValueError):
     """
 
 
+class InscriptionProcessingError(ValueError):
+    """
+    Reports inscription failures after other available inscriptions have been processed.
+    """
+
+
 @dataclass
 class IndexingResources:
     """
@@ -87,6 +93,7 @@ class IndexingResources:
     solr: solr_client.SolrClient
     batch_size: int
     data_revision: str = 'unavailable'
+    document_failures: list[str] = field(default_factory=list)
 
     @classmethod
     def load(
@@ -247,12 +254,55 @@ def build_complete_document(inscription_path: Path, resources: IndexingResources
 
 def build_complete_documents(inscription_paths: Sequence[Path], resources: IndexingResources) -> list[etree._Element]:
     """
-    Builds every supplied document locally before any caller mutates Solr.
+    Builds available documents and records individual failures before callers contact Solr.
 
     Called by: update_index(), reindex.process_prepared_full_reindex()
     """
-    documents = [build_complete_document(inscription_path, resources) for inscription_path in inscription_paths]
+    documents: list[etree._Element] = []
+    for inscription_path in inscription_paths:
+        try:
+            document = build_complete_document(inscription_path, resources)
+        except Exception as error:
+            detail = f'{inscription_path.stem}: {type(error).__name__}: {error}'
+            resources.document_failures.append(detail)
+            log.warning(f'Inscription skipped; detail, ``{detail}``', exc_info=True)
+        else:
+            documents.append(document)
     return documents
+
+
+def raise_document_failures(resources: IndexingResources) -> None:
+    """
+    Fails the job after valid inscriptions finish so queue retries and summary email still apply.
+
+    Called by: update_index(), reindex.process_prepared_full_reindex()
+    """
+    if resources.document_failures:
+        details = '; '.join(resources.document_failures)
+        raise InscriptionProcessingError(
+            f'{len(resources.document_failures)} inscription(s) failed; other available inscriptions were processed. {details}'
+        )
+
+
+def post_document_or_record_failure(document: etree._Element, resources: IndexingResources) -> bool:
+    """
+    Posts one document and records a Solr data rejection without blocking other inscriptions.
+
+    Called by: update_index(), post_document_batches()
+    """
+    posted = False
+    try:
+        resources.solr.post_documents([document])
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code != 400:
+            raise
+        inscription_id = field_values(document, 'id')[0]
+        detail = f'{inscription_id}: Solr rejected the document (HTTP 400): {error.response.text[:1000]}'
+        resources.document_failures.append(detail)
+        log.warning(f'Inscription skipped; detail, ``{detail}``')
+    else:
+        posted = True
+    return posted
 
 
 def build_solr_document(inscription_path: Path, xsl_path: Path) -> str:
@@ -513,17 +563,21 @@ def update_index(
     ids_to_remove = [Path(filename).stem for filename in filenames if not (inscriptions_path / filename).is_file()]
     with IndexingResources.load(data_revision=data_revision) as resources:
         documents = build_complete_documents(paths_to_update, resources)
+        posted_count = 0
         for document in documents:
             inscription_id = field_values(document, 'id')[0]
             post_started = time.monotonic()
             try:
-                resources.solr.post_documents([document])
+                posted = post_document_or_record_failure(document, resources)
             except Exception:
                 log.error(
                     f'Incremental complete-document update failed; inscription_id, ``{inscription_id}``; '
                     f'data_revision, ``{data_revision}``'
                 )
                 raise
+            if not posted:
+                continue
+            posted_count += 1
             elapsed_seconds = time.monotonic() - post_started
             log.info(
                 f'Incremental complete-document update completed; inscription_id, ``{inscription_id}``; '
@@ -532,9 +586,11 @@ def update_index(
             )
         delete_id_batches(ids_to_remove, resources)
         log.info(
-            f'Incremental Solr indexing completed; document_count, ``{len(documents)}``; '
+            f'Incremental Solr indexing finished; document_count, ``{posted_count}``; '
+            f'failed_document_count, ``{len(resources.document_failures)}``; '
             f'deletion_count, ``{len(ids_to_remove)}``; request_count, ``{resources.solr.request_count}``'
         )
+        raise_document_failures(resources)
     return
 
 
@@ -551,6 +607,14 @@ def post_document_batches(documents: Sequence[etree._Element], resources: Indexi
         last_id = field_values(document_batch[-1], 'id')[0]
         try:
             resources.solr.post_documents(document_batch)
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 400:
+                raise
+            log.warning('Solr rejected a document batch; trying each inscription separately.')
+            for document in document_batch:
+                if post_document_or_record_failure(document, resources):
+                    batch_count += 1
+            continue
         except Exception:
             log.error(
                 f'Solr document batch failed; document_count, ``{len(document_batch)}``; first_id, ``{first_id}``; '

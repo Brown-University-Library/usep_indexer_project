@@ -62,7 +62,7 @@ def process_full_reindex() -> None:
     Called by: spool.process_valid_events()
     """
     log.info('Full reindex processing started.')
-    data_revision = processor.prepare_public_data(validate_source_xml=True)
+    data_revision = processor.prepare_public_data(validate_source_xml=False)
     process_prepared_full_reindex(data_revision=data_revision)
     return
 
@@ -78,6 +78,7 @@ def process_prepared_full_reindex(*, data_revision: str = 'unavailable') -> None
     inscription_paths = [Path(file_path) for file_path in build_inscription_filepaths(inscriptions_path)]
     with indexer.IndexingResources.load(data_revision=data_revision) as resources:
         documents = indexer.build_complete_documents(inscription_paths, resources)
+        build_failure_count = len(resources.document_failures)
         solr_ids = resources.solr.get_ids()
         ids_to_remove = build_orphaned_ids([str(path) for path in inscription_paths], solr_ids)
         log.info(
@@ -86,13 +87,17 @@ def process_prepared_full_reindex(*, data_revision: str = 'unavailable') -> None
             f'data_revision, ``{data_revision}``'
         )
         document_batch_count, deletion_batch_count = update_all_index_entries(documents, ids_to_remove, resources)
+        posted_document_count = len(documents) - (len(resources.document_failures) - build_failure_count)
+        deletion_count = 0 if resources.document_failures else len(ids_to_remove)
         elapsed_seconds = time.monotonic() - rebuild_started
         log.info(
-            f'Full Solr indexing completed; document_count, ``{len(documents)}``; '
-            f'document_batch_count, ``{document_batch_count}``; deletion_count, ``{len(ids_to_remove)}``; '
+            f'Full Solr indexing finished; document_count, ``{posted_document_count}``; '
+            f'failed_document_count, ``{len(resources.document_failures)}``; '
+            f'document_batch_count, ``{document_batch_count}``; deletion_count, ``{deletion_count}``; '
             f'deletion_batch_count, ``{deletion_batch_count}``; request_count, ``{resources.solr.request_count}``; '
             f'elapsed_seconds, ``{elapsed_seconds:.3f}``; data_revision, ``{data_revision}``'
         )
+        indexer.raise_document_failures(resources)
     return
 
 
@@ -125,5 +130,9 @@ def update_all_index_entries(
     Called by: process_prepared_full_reindex()
     """
     document_batch_count = indexer.post_document_batches(documents, resources)
-    deletion_batch_count = indexer.delete_id_batches(ids_to_remove, resources)
+    deletion_batch_count = 0
+    if resources.document_failures:
+        log.warning('Skipping stale-ID deletion because some inscriptions could not be indexed.')
+    else:
+        deletion_batch_count = indexer.delete_id_batches(ids_to_remove, resources)
     return document_batch_count, deletion_batch_count
