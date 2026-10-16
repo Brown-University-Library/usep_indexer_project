@@ -84,6 +84,20 @@ class IndexingRefactorTests(SimpleTestCase):
         self.assertEqual([], indexer.field_values(metadata_document, 'transcription'))
         handler.assert_not_called()
 
+    def test_complete_builder_includes_nested_edition_blocks(self) -> None:
+        """
+        Checks nested edition blocks reach both transcription and full-text search in source order.
+        """
+        handler = Mock(return_value=httpx.Response(200, text='ok'))
+        resources = build_resources(self.make_http_client(handler))
+        document = indexer.build_complete_document(FIXTURE_PATH / 'nested-transcribed.xml', resources)
+
+        expected_transcription = 'ARMA CANO arma cano'
+        self.assertEqual(['transcription'], indexer.field_values(document, 'status'))
+        self.assertEqual([expected_transcription], indexer.field_values(document, 'transcription'))
+        self.assertEqual([expected_transcription], indexer.field_values(document, 'text'))
+        handler.assert_not_called()
+
     def test_bibliography_graph_handles_flat_refs_unicode_recursion_and_cycles(self) -> None:
         """
         Checks fragment/bare parents, descendant titles, Unicode, multi-level traversal, and cycles.
@@ -162,6 +176,23 @@ class IndexingRefactorTests(SimpleTestCase):
 
         for expected_token in ('right', 'wrong', 'extra', 'Marcus', '12', 'line', 'second block'):
             self.assertIn(expected_token, value)
+
+    def test_transcription_ignores_blocks_outside_an_empty_edition(self) -> None:
+        """
+        Checks translation and commentary blocks do not supply missing edition text.
+        """
+        inscription_xml = parse_xml_text(
+            """
+            <TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body>
+              <div type="edition"><div type="textpart"><ab> </ab></div></div>
+              <div type="translation"><ab>translation excluded</ab></div>
+              <div type="commentary"><div><ab>commentary excluded</ab></div></div>
+            </body></text></TEI>
+            """
+        )
+        transformer = transcription.load_transformer(FIXTURE_PATH / 'transcription.xsl')
+
+        self.assertEqual('', transcription.build_transcription(inscription_xml, transformer))
 
     def test_complete_update_uses_one_post_and_no_read_atomic_update_or_commit(self) -> None:
         """

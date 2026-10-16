@@ -10,7 +10,7 @@
           <field name="bib_ids"><xsl:value-of select="@target"/></field>
         </xsl:for-each>
         <xsl:choose>
-          <xsl:when test="normalize-space(/tei:TEI/tei:text/tei:body/tei:div[@type='edition']/tei:ab)">
+          <xsl:when test="normalize-space(/tei:TEI/tei:text/tei:body/tei:div[@type='edition']//tei:ab)">
             <field name="status">transcription</field>
           </xsl:when>
           <xsl:when test="normalize-space(/tei:TEI/tei:teiHeader/tei:fileDesc/tei:sourceDesc/tei:msDesc/tei:physDesc)">

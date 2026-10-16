@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc><publicationStmt><idno xml:id="nested-transcribed"/></publicationStmt></fileDesc>
+  </teiHeader>
+  <text><body>
+    <div type="edition">
+      <div type="textpart" subtype="diplomatic"><ab><lb/>ARMA CANO</ab></div>
+      <div type="textpart" subtype="interpretive">
+        <div type="textpart"><ab><lb/>arma cano</ab></div>
+      </div>
+    </div>
+    <div type="translation"><ab>translation excluded</ab></div>
+    <div type="commentary"><div><ab>commentary excluded</ab></div></div>
+  </body></text>
+</TEI>

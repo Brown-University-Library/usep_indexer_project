@@ -2,8 +2,9 @@
 Builds normalized searchable transcription without contacting Solr.
 
 The configured researcher-owned stylesheet remains responsible for textual choices. A narrow
-compatibility wrapper supplies only edition ``ab`` elements because the current stylesheet expects
-its caller to make that selection; a future stylesheet can take over the selection directly.
+compatibility wrapper supplies only edition ``ab`` elements, including those nested inside text parts,
+because the current stylesheet expects its caller to make that selection; a future stylesheet can
+take over the selection directly.
 """
 
 import copy
@@ -35,7 +36,7 @@ def build_transcription(inscription_xml: etree._ElementTree, transformer: etree.
     Called by: indexer.build_complete_document()
     """
     edition_elements: list[etree._Element] = inscription_xml.xpath(
-        "//tei:div[@type='edition']/tei:ab",
+        "//tei:div[@type='edition']//tei:ab",
         namespaces=TEI_NAMESPACE,
     )
     transcription = ''
