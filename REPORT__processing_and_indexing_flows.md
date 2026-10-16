@@ -138,15 +138,6 @@ Any valid full_reindex job makes the whole claimed batch use this flow
 Pull the latest usep-data repository
                 |
                 v
-Check every source inscription XML file
-                |
-                +--> any malformed XML
-                |          |
-                |          v
-                |    stop before copying or contacting Solr
-                |    and follow the queue-failure flow
-                |
-                v
 Copy resources, merge inscriptions, publish webserved_data,
 and rewrite known resource links
                 |
@@ -160,17 +151,22 @@ Build and check every complete search document locally
                 +--> any local build fails
                 |          |
                 |          v
-                |    stop before the first Solr request
-                |    and follow the queue-failure flow
+                |    warn, record the inscription failure,
+                |    and continue with the other documents
                 |
                 v
 Read all current Solr IDs once
                 |
                 v
-Post all rebuilt documents in configured-size groups
+Post valid rebuilt documents in configured-size groups;
+on HTTP 400, try those documents separately
                 |
                 v
-Delete IDs with no matching public XML in configured-size groups
+If any inscription failed, skip stale-ID deletion and report
+the accumulated failures through the queue-failure flow
+                |
+                v
+Otherwise delete IDs with no matching public XML in configured-size groups
                 |
                 v
 Move successfully handled job files to completed/
@@ -183,7 +179,7 @@ already live. The retry starts from the beginning and
 safely writes the current data again.
 ```
 
-**Narrative.** `/reindex_all/` saves a job; the web request does not rebuild. The processor checks all source XML before replacing public copies, then prepares every search record before contacting Solr. A local conversion problem therefore leaves Solr intact, although copied public files may already be newer. The index is updated in place: documents are posted in groups, then IDs with no matching XML are removed. A later Solr failure can leave earlier groups accepted; retrying safely repeats the workflow. Any valid full-reindex job selects this path for its claimed group.
+**Narrative.** `/reindex_all/` saves a job; the web request does not rebuild. The processor publishes the source files, then attempts to prepare every search record before contacting Solr. It warns about individual failures and posts valid records. A rejected document batch is attempted one document at a time when Solr returns HTTP 400. Failed inscriptions retain their previous Solr records, but public XML has already been copied. Any inscription failure prevents stale-ID deletion and causes the job to fail after valid work finishes, retaining the normal retries and summary email. A clean run also removes IDs with no matching XML. Any valid full-reindex job selects this path for its claimed group.
 
 ## Individual inscription refresh
 
@@ -373,7 +369,7 @@ Combine valid jobs and run one processing workflow
                      no attempt count or email is guaranteed
 ```
 
-**Narrative.** Queue files make processing restartable. Work abandoned in `processing/` after an interruption is tried before new work. Badly formed queue files are isolated rather than blocking good ones. A reported Git, copying, XML, transformation, or Solr error fails the combined workflow; each valid job records the attempt and is retried until the limit. The command then attempts one summary email. An abrupt termination can leave jobs for recovery without an attempt count or email. Solr updates accepted before a later failure remain, so a retry safely repeats the work.
+**Narrative.** Queue files make processing restartable. Work abandoned in `processing/` after an interruption is tried before new work. Badly formed queue files are isolated rather than blocking good ones. Individual inscription errors are collected while other valid inscriptions are processed; the combined workflow then reports failure. Shared-resource, Git, copying, and service failures can stop work immediately. Each valid job records the failed attempt and is retried until the limit. The command then attempts one summary email. An abrupt termination can leave jobs for recovery without an attempt count or email. Solr updates accepted before a later failure remain, so a retry safely repeats the work.
 
 ## Manual orphan cleanup
 
