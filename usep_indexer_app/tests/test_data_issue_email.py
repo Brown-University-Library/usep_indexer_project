@@ -98,6 +98,8 @@ class DataIssueEmailTests(SimpleTestCase):
         self.assertIn('[Development]', message.subject)
         self.assertIn('XML could not be read (45)', message.body)
         self.assertIn('XML ID and filename differ (1)', message.body)
+        self.assertIn('  "wrong-id" — Filename ID\n  "metadata" — XML-derived Solr ID', message.body)
+        self.assertIn('xml:id attribute on publicationStmt/idno', message.body)
         self.assertIn('Inscriptions successfully accepted by Solr: 1', message.body)
         self.assertIn('Inscriptions with recorded failures: 46', message.body)
         self.assertIn('Data revision: abc1234', message.body)
@@ -128,6 +130,25 @@ class DataIssueEmailTests(SimpleTestCase):
         self.run_processor(fails=False)
         self.assertEqual(2, len(self.team_messages()))
         self.assertEqual(1, len(list((self.spool_root / 'completed').glob('*.json'))))
+
+    def test_mismatched_id_preserves_whitespace_without_adding_email_lines(self) -> None:
+        """
+        Checks stylesheet-generated ID differences remain visible without copying raw error messages.
+        """
+        document = etree.fromstring(b'<doc><field name="id">metadata</field></doc>')
+        indexer.replace_field_values(document, 'id', [' metadata\n'])
+        with httpx.Client(transport=httpx.MockTransport(self.handler)) as client:
+            resources = build_resources(client)
+            with (
+                data_issue_email.collect_report() as report,
+                patch.object(indexer, 'transform_to_document', return_value=document),
+            ):
+                indexer.build_complete_documents([FIXTURE_PATH / 'metadata.xml'], resources)
+        body = data_issue_email.build_message(report)
+        self.assertIn('  "metadata" — Filename ID', body)
+        self.assertIn('  " metadata\\n" — XML-derived Solr ID\n', body)
+        self.assertNotIn('SolrDocumentValidationError', body)
+        self.assertNotIn(str(FIXTURE_PATH), body)
 
     def test_disabled_recipients_leave_admin_email_and_retry_unchanged(self) -> None:
         """

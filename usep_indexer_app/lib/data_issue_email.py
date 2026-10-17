@@ -26,7 +26,12 @@ DATA_REPOSITORY_URL = 'https://github.com/Brown-University-Library/usep-data'
 ISSUE_DESCRIPTIONS = {
     'xml_parse': ('XML could not be read', 'Check the XML syntax and character encoding.'),
     'xml_transform': ('XML transformation failed', 'Review the inscription and the indexing stylesheets together.'),
-    'id_mismatch': ('XML ID and filename differ', 'Check which ID and filename should identify the inscription.'),
+    'id_mismatch': (
+        'XML ID and filename differ',
+        'The filename without .xml must match the ID produced by the indexing stylesheet. '
+        'The standard stylesheet reads the xml:id attribute on publicationStmt/idno. '
+        'Compare the quoted values below; spaces and escaped characters are significant.',
+    ),
     'id_missing': ('Missing or repeated document ID', 'The search document must contain exactly one nonempty ID.'),
     'date_range': ('Date range ends before it begins', 'Check the notBefore and notAfter years.'),
     'invalid_year': ('Date is not an integer year', 'Check the notBefore and notAfter values and their transformation.'),
@@ -46,12 +51,13 @@ ISSUE_DESCRIPTIONS = {
 @dataclass(frozen=True)
 class DataIssue:
     """
-    Records only an inscription filename, a known category, and its repository-relative source path.
+    Records an inscription filename, category, source path, and optional mismatched document ID.
     """
 
     filename: str
     category: str
     source_path: str | None
+    document_id: str | None = None
 
 
 @dataclass
@@ -136,7 +142,7 @@ def source_path_for_filename(filename: str) -> str | None:
     return source_path
 
 
-def record_failure(filename: str, category: str | None) -> None:
+def record_failure(filename: str, category: str | None, *, document_id: str | None = None) -> None:
     """
     Counts each failed inscription and retains safe details only for recognized data problems.
 
@@ -151,7 +157,14 @@ def record_failure(filename: str, category: str | None) -> None:
             except OSError:
                 log.warning('Unable to locate the repository source file for a data-issue email.')
                 source_path = None
-            report.issues.append(DataIssue(Path(filename).name, category, source_path))
+            report.issues.append(
+                DataIssue(
+                    Path(filename).name,
+                    category,
+                    source_path,
+                    document_id=document_id if category == 'id_mismatch' else None,
+                )
+            )
     return
 
 
@@ -211,6 +224,11 @@ def build_message(report: RunReport) -> str:
                     character if character.isprintable() else ' ' for character in Path(issue.filename).stem
                 )
                 lines.append(f'- {inscription_id}')
+                if category == 'id_mismatch' and issue.document_id is not None:
+                    filename_id = json.dumps(Path(issue.filename).stem, ensure_ascii=False)
+                    document_id = json.dumps(issue.document_id, ensure_ascii=False)
+                    lines.append(f'  {filename_id} — Filename ID')
+                    lines.append(f'  {document_id} — XML-derived Solr ID')
                 if issue.source_path and report.data_revision != 'unavailable':
                     source_url = f'{DATA_REPOSITORY_URL}/blob/{report.data_revision}/{quote(issue.source_path, safe="/")}'
                     lines.append(f'  XML: {source_url}')

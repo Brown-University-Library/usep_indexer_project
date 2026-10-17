@@ -73,7 +73,7 @@ class SolrDocumentValidationError(ValueError):
     Identifies a locally built document that violates the minimum public-webapp requirements.
     """
 
-    def __init__(self, message: str, *, category: str = 'document_validation') -> None:
+    def __init__(self, message: str, *, category: str = 'document_validation', document_id: str | None = None) -> None:
         """
         Keeps a stable data-review category separate from the operational error message.
 
@@ -81,6 +81,7 @@ class SolrDocumentValidationError(ValueError):
         """
         super().__init__(message)
         self.category = category
+        self.document_id = document_id
 
 
 class InscriptionProcessingError(ValueError):
@@ -277,13 +278,15 @@ def build_complete_documents(inscription_paths: Sequence[Path], resources: Index
             resources.document_failures.append(detail)
             log.warning(f'Inscription skipped; detail, ``{detail}``', exc_info=True)
             category: str | None = None
+            document_id: str | None = None
             if isinstance(error, SolrDocumentValidationError):
                 category = error.category
+                document_id = error.document_id
             elif isinstance(error, (etree.XMLSyntaxError, UnicodeError)):
                 category = 'xml_parse'
             elif isinstance(error, etree.XSLTApplyError):
                 category = 'xml_transform'
-            data_issue_email.record_failure(inscription_path.name, category)
+            data_issue_email.record_failure(inscription_path.name, category, document_id=document_id)
         else:
             documents.append(document)
     return documents
@@ -426,6 +429,7 @@ def validate_document_id(document: etree._Element, expected_id: str) -> None:
         raise SolrDocumentValidationError(
             f'Solr document id {id_values[0]!r} does not match inscription filename stem {expected_id!r}.',
             category='id_mismatch',
+            document_id=id_values[0],
         )
     return
 
