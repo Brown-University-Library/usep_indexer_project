@@ -1,7 +1,7 @@
 import copy
 import pathlib
 import tempfile
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 from django.test import SimpleTestCase, override_settings
@@ -74,11 +74,10 @@ class IndexingRefactorTests(SimpleTestCase):
                 document = indexer.build_complete_document(FIXTURE_PATH / filename, resources)
                 self.assertEqual([expected_status], indexer.field_values(document, 'status'))
                 self.assertEqual(['first', 'second'], indexer.field_values(document, 'researcher_extension'))
+                self.assertEqual([], document.xpath('./field[@name="transcription"]'))
 
         transcribed_document = indexer.build_complete_document(FIXTURE_PATH / 'transcribed.xml', resources)
         metadata_document = indexer.build_complete_document(FIXTURE_PATH / 'metadata.xml', resources)
-        transcription_values = indexer.field_values(transcribed_document, 'transcription')
-        self.assertEqual(['arma Marcus virumque cano'], transcription_values)
         self.assertIn('arma Marcus virumque cano', indexer.field_values(transcribed_document, 'text'))
         self.assertEqual(['unicode-Δ', 'parent'], indexer.field_values(transcribed_document, 'bib_ids'))
         self.assertEqual([], indexer.field_values(metadata_document, 'transcription'))
@@ -86,7 +85,7 @@ class IndexingRefactorTests(SimpleTestCase):
 
     def test_complete_builder_includes_nested_edition_blocks(self) -> None:
         """
-        Checks nested edition blocks reach both transcription and full-text search in source order.
+        Checks nested edition blocks reach full-text search in source order without a separate field.
         """
         handler = Mock(return_value=httpx.Response(200, text='ok'))
         resources = build_resources(self.make_http_client(handler))
@@ -94,9 +93,43 @@ class IndexingRefactorTests(SimpleTestCase):
 
         expected_transcription = 'ARMA CANO arma cano'
         self.assertEqual(['transcription'], indexer.field_values(document, 'status'))
-        self.assertEqual([expected_transcription], indexer.field_values(document, 'transcription'))
+        self.assertEqual([], document.xpath('./field[@name="transcription"]'))
         self.assertEqual([expected_transcription], indexer.field_values(document, 'text'))
         handler.assert_not_called()
+
+    def test_complete_builder_removes_stylesheet_transcription_and_preserves_text(self) -> None:
+        """
+        Checks stylesheet transcription fields are removed while existing search text is preserved.
+        """
+        handler = Mock(return_value=httpx.Response(200, text='ok'))
+        resources = build_resources(self.make_http_client(handler))
+        inscription_xml = indexer.parse_inscription(FIXTURE_PATH / 'transcribed.xml')
+        base_document = indexer.transform_to_document(inscription_xml, resources.base_transformer)
+        indexer.append_field_value(base_document, 'transcription', 'old transcription')
+        etree.SubElement(base_document, 'field', name='transcription')
+        indexer.append_field_value(base_document, 'text', 'existing search text')
+        indexer.append_field_value(base_document, 'text', 'arma Marcus virumque cano')
+        with patch.object(indexer, 'transform_to_document', return_value=base_document):
+            document = indexer.build_complete_document(FIXTURE_PATH / 'transcribed.xml', resources)
+
+        self.assertEqual([], document.xpath('./field[@name="transcription"]'))
+        self.assertEqual(['existing search text', 'arma Marcus virumque cano'], indexer.field_values(document, 'text'))
+        self.assertEqual(['transcription'], indexer.field_values(document, 'status'))
+        handler.assert_not_called()
+
+    def test_document_validation_requires_transcription_in_search_text(self) -> None:
+        """
+        Checks transcription validation still rejects missing search text and an inconsistent status.
+        """
+        document = etree.fromstring(
+            b'<doc><field name="id">expected</field><field name="status">transcription</field></doc>'
+        )
+        with self.assertRaisesRegex(indexer.SolrDocumentValidationError, 'full-text field'):
+            indexer.validate_complete_document(document, 'expected', 'arma cano')
+        with self.assertRaisesRegex(indexer.SolrDocumentValidationError, 'Status/transcription mismatch'):
+            indexer.validate_complete_document(document, 'expected', '')
+        indexer.append_field_value(document, 'text', 'arma cano')
+        indexer.validate_complete_document(document, 'expected', 'arma cano')
 
     def test_bibliography_graph_handles_flat_refs_unicode_recursion_and_cycles(self) -> None:
         """
@@ -219,7 +252,8 @@ class IndexingRefactorTests(SimpleTestCase):
         self.assertEqual('500', update_xml.get('commitWithin'))
         self.assertEqual(1, len(update_xml.xpath('./doc')))
         self.assertEqual(['unicode-Δ', 'parent'], update_xml.xpath('./doc/field[@name="bib_ids"]/text()'))
-        self.assertEqual(['arma Marcus virumque cano'], update_xml.xpath('./doc/field[@name="transcription"]/text()'))
+        self.assertEqual([], update_xml.xpath('./doc/field[@name="transcription"]'))
+        self.assertEqual(['arma Marcus virumque cano'], update_xml.xpath('./doc/field[@name="text"]/text()'))
 
     def test_local_contract_failure_sends_zero_requests(self) -> None:
         """

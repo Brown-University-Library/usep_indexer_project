@@ -2,8 +2,9 @@
 Builds complete USEP Solr documents locally and coordinates index mutations.
 
 The configured researcher-owned base XSL remains the general field authority. This module preserves
-its complete ``doc`` output, narrowly replaces cross-resource bibliography and transcription fields,
-validates the public webapp's minimum contract, and only then sends an update to Solr.
+its ``doc`` output, replaces cross-resource bibliography values, and adds transcription to search text.
+It removes the separate transcription field, validates the public webapp's required fields, and only
+then sends an update to Solr.
 """
 
 import copy
@@ -33,7 +34,6 @@ OPTIONAL_SINGLE_FIELDS = {
     'notAfter',
     'notBefore',
     'text_genre_desc',
-    'transcription',
 }
 VALID_STATUSES = {'bib_only', 'metadata', 'transcription'}
 FULL_TEXT_FIELD = 'text'
@@ -64,7 +64,6 @@ OPTIONAL_OMIT_IF_EMPTY_FIELDS = {
     'text_genre',
     'text_genre_desc',
     'title',
-    'transcription',
     'writing',
 }
 
@@ -239,7 +238,8 @@ def build_complete_document(inscription_path: Path, resources: IndexingResources
     replace_field_values(document, 'bib_ids', complete_bibliography_ids)
 
     transcription_value = transcription.build_transcription(inscription_xml, resources.transcription_transformer)
-    replace_field_values(document, 'transcription', [transcription_value] if transcription_value else [])
+    ## removes the separate field, including any value supplied by the base stylesheet.
+    replace_field_values(document, 'transcription', [])
     if transcription_value:
         append_field_value(document, FULL_TEXT_FIELD, transcription_value, deduplicate=True)
     omit_empty_optional_fields(document)
@@ -438,7 +438,7 @@ def validate_complete_document(document: etree._Element, expected_id: str, trans
             f'transcription_present is {bool(transcription_value)!r}.'
         )
     if transcription_value and transcription_value not in field_values(document, FULL_TEXT_FIELD):
-        raise SolrDocumentValidationError('Normalized transcription must also be present in the full-text field.')
+        raise SolrDocumentValidationError('Normalized transcription must be present in the full-text field.')
 
     validate_dates(document)
     bibliography_values = field_values(document, 'bib_ids')
