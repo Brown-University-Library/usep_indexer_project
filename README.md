@@ -50,6 +50,8 @@ Individual inscription failures are reported after the valid documents have been
 
 A nice visualization of the listening-processing-indexing workflows is at: [REPORT__processing_and_indexing_flows.md](https://github.com/Brown-University-Library/usep_indexer_project/blob/main/REPORT__processing_and_indexing_flows.md)
 
+An optional, separate data-team email groups recognized inscription errors and lists every affected inscription with a link to its source XML at the processed revision when available. It includes the counts of accepted documents and recorded failures without copying raw exceptions or server details. Each retry with these errors sends another report; successful runs and runs with no recognized inscription errors stay quiet. Operational failures continue to use the administrator notification. Recipient and subject-label settings are described in `config/dotenv_example_file.txt`; the team email is disabled by default. Reports are held only in memory, and an email-delivery failure is logged without changing the indexing result or adding a separate delivery queue.
+
 
 ## Requirements
 
