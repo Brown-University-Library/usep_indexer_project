@@ -405,7 +405,7 @@ def validate_document_id(document: etree._Element, expected_id: str) -> None:
 
 def validate_complete_document(document: etree._Element, expected_id: str, transcription_value: str) -> None:
     """
-    Validates the minimum active webapp contract while allowing additional fields.
+    Validates the required webapp fields and normalizes years while allowing additional fields.
 
     Called by: build_complete_document(), document-contract tests
     """
@@ -440,16 +440,16 @@ def validate_complete_document(document: etree._Element, expected_id: str, trans
     if transcription_value and transcription_value not in field_values(document, FULL_TEXT_FIELD):
         raise SolrDocumentValidationError('Normalized transcription must be present in the full-text field.')
 
-    validate_dates(document)
+    validate_and_normalize_dates(document)
     bibliography_values = field_values(document, 'bib_ids')
     if len(bibliography_values) != len(set(bibliography_values)):
         raise SolrDocumentValidationError('The bib_ids field cannot contain duplicate values.')
     return
 
 
-def validate_dates(document: etree._Element) -> None:
+def validate_and_normalize_dates(document: etree._Element) -> None:
     """
-    Requires numeric date bounds and a nondecreasing range when both are present.
+    Checks numeric date bounds and their order, then writes plain integer values for Solr.
 
     Called by: validate_complete_document()
     """
@@ -463,6 +463,8 @@ def validate_dates(document: etree._Element) -> None:
                 raise SolrDocumentValidationError(f'Solr field {field_name!r} must contain an integer year.') from error
     if 'notBefore' in date_values and 'notAfter' in date_values and date_values['notBefore'] > date_values['notAfter']:
         raise SolrDocumentValidationError('notBefore cannot be greater than notAfter.')
+    for field_name, year in date_values.items():
+        replace_field_values(document, field_name, [str(year)])
     return
 
 

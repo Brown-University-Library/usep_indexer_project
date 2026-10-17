@@ -301,6 +301,78 @@ class IndexingRefactorTests(SimpleTestCase):
         with self.assertRaisesRegex(indexer.SolrDocumentValidationError, 'notBefore'):
             indexer.validate_complete_document(bad_date_document, 'expected', '')
 
+    def test_complete_update_posts_normalized_dates(self) -> None:
+        """
+        Checks posted years have no surrounding whitespace, extra sign, or leading zeroes.
+        """
+        handler = Mock(return_value=httpx.Response(200, text='updated'))
+        resources = build_resources(self.make_http_client(handler))
+        cases = [
+            (' -0600\t', '-0450 ', ['-600'], ['-450']),
+            ('\n+0010 ', ' 0200\n', ['10'], ['200']),
+            ('-0000', '0000', ['0'], ['0']),
+            (None, ' -0500 ', [], ['-500']),
+            (' 0100 ', None, ['100'], []),
+            (' \t', '\n ', [], []),
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            public_data_path = pathlib.Path(temporary_directory)
+            inscriptions_path = public_data_path / 'inscriptions'
+            inscriptions_path.mkdir()
+            inscription_path = inscriptions_path / 'metadata.xml'
+            inscription_path.write_bytes((FIXTURE_PATH / 'metadata.xml').read_bytes())
+            for not_before, not_after, expected_before, expected_after in cases:
+                with self.subTest(not_before=not_before, not_after=not_after):
+                    handler.reset_mock()
+                    base_document = indexer.transform_to_document(
+                        indexer.parse_inscription(inscription_path), resources.base_transformer
+                    )
+                    for field_name, value in (('notBefore', not_before), ('notAfter', not_after)):
+                        if value is not None:
+                            indexer.append_field_value(base_document, field_name, value)
+                    indexer.append_field_value(base_document, 'notBefore_desc', 'original date description')
+                    with (
+                        override_settings(WEBSERVED_DATA_DIR_PATH=public_data_path),
+                        patch.object(indexer, 'transform_to_document', return_value=base_document),
+                    ):
+                        indexer.update_index_entry('metadata.xml', resources=resources)
+
+                    handler.assert_called_once()
+                    request: httpx.Request = handler.call_args.args[0]
+                    update_xml = etree.fromstring(request.content)
+                    self.assertEqual(expected_before, update_xml.xpath('./doc/field[@name="notBefore"]/text()'))
+                    self.assertEqual(expected_after, update_xml.xpath('./doc/field[@name="notAfter"]/text()'))
+                    self.assertEqual(
+                        ['original date description'], update_xml.xpath('./doc/field[@name="notBefore_desc"]/text()')
+                    )
+
+    def test_date_normalization_still_rejects_invalid_years_and_reversed_ranges(self) -> None:
+        """
+        Checks invalid dates fail during document construction before any Solr request.
+        """
+        handler = Mock(return_value=httpx.Response(200, text='updated'))
+        resources = build_resources(self.make_http_client(handler))
+        inscription_path = FIXTURE_PATH / 'metadata.xml'
+        cases = [
+            ('unknown', '200', 'integer year'),
+            ('100', '200.5', 'integer year'),
+            (' -0450 ', ' -0600 ', 'notBefore cannot be greater'),
+            (' 0200 ', ' 0100 ', 'notBefore cannot be greater'),
+        ]
+        for not_before, not_after, expected_error in cases:
+            with self.subTest(not_before=not_before, not_after=not_after):
+                base_document = indexer.transform_to_document(
+                    indexer.parse_inscription(inscription_path), resources.base_transformer
+                )
+                indexer.append_field_value(base_document, 'notBefore', not_before)
+                indexer.append_field_value(base_document, 'notAfter', not_after)
+                with (
+                    patch.object(indexer, 'transform_to_document', return_value=base_document),
+                    self.assertRaisesRegex(indexer.SolrDocumentValidationError, expected_error),
+                ):
+                    indexer.build_complete_document(inscription_path, resources)
+        handler.assert_not_called()
+
     def test_solr_rejection_propagates(self) -> None:
         """
         Checks a rejected complete update reaches the queue retry boundary.
