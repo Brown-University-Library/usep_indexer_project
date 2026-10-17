@@ -50,7 +50,7 @@ Individual inscription failures are reported after the valid documents have been
 
 A nice visualization of the listening-processing-indexing workflows is at: [REPORT__processing_and_indexing_flows.md](https://github.com/Brown-University-Library/usep_indexer_project/blob/main/REPORT__processing_and_indexing_flows.md)
 
-An optional, separate data-team email groups recognized inscription errors and lists every affected inscription with a link to its source XML at the processed revision when available. It includes the counts of accepted documents and recorded failures without copying raw exceptions or server details. Each retry with these errors sends another report; successful runs and runs with no recognized inscription errors stay quiet. Operational failures continue to use the administrator notification. Recipient and subject-label settings are described in `config/dotenv_example_file.txt`; the team email is disabled by default. Reports are held only in memory, and an email-delivery failure is logged without changing the indexing result or adding a separate delivery queue.
+An optional, separate data-team email groups recognized inscription errors and lists every affected inscription with a link to its source XML at the processed revision when available. It includes the counts of accepted documents and recorded failures without copying raw exceptions or server details. Each retry with these errors sends another report; successful runs and runs with no recognized inscription errors stay quiet. Operational failures continue to use the administrator notification. Recipient and subject-label settings are described in `config/example.env`; the team email is disabled by default. Reports are held only in memory, and an email-delivery failure is logged without changing the indexing result or adding a separate delivery queue.
 
 
 ## Requirements
@@ -75,7 +75,7 @@ Indexing requires resources from that usep_data clone, and an accessible Solr co
 ```bash
 cd /path/to/usep_indexer_stuff/
 git clone git@github.com:Brown-University-Library/usep_indexer_project.git
-cp ./usep_indexer_project/config/dotenv_example_file.txt ./.env
+cp ./usep_indexer_project/config/example.env ./.env
 mkdir -p ./logs ./cache_dir ./spool_dir
 cd ./usep_indexer_project
 uv sync --upgrade
@@ -130,7 +130,7 @@ Before processing queued work:
 
 ### Configure the environment
 
-Update the outer `.env` using `config/dotenv_example_file.txt` as the checklist. In particular:
+Update the outer `.env` using `config/example.env` as the checklist. In particular:
 
 - Replace the Django secret, Basic Auth credentials, hosts, trusted origins, and IP allowlist. For ordinary local HTTP development, keep `DEBUG_JSON="true"` and `SESSION_COOKIE_SECURE_JSON="false"`.
 - Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by the user running the `./manage.py` process-command, described below.

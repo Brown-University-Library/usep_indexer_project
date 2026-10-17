@@ -74,11 +74,6 @@ STATIC_ROOT = os.environ['STATIC_ROOT']
 SERVER_EMAIL = os.environ['SERVER_EMAIL']
 EMAIL_HOST = os.environ['EMAIL_HOST']
 EMAIL_PORT = int(os.environ['EMAIL_PORT'])
-USEP_DATA_TEAM_EMAILS = parse_recipients(os.environ.get('USEP_DATA_TEAM_EMAILS_JSON', '[]'))
-USEP_DATA_TEAM_CC_EMAILS = parse_recipients(
-    os.environ.get('USEP_DATA_TEAM_CC_EMAILS_JSON', '[]'), setting_name='USEP_DATA_TEAM_CC_EMAILS_JSON'
-)
-USEP_DATA_TEAM_EMAIL_LABEL = os.environ.get('USEP_DATA_TEAM_EMAIL_LABEL', 'USEP indexer')
 
 CACHES = json.loads(os.environ['CACHES_JSON'])
 
@@ -100,6 +95,11 @@ SPOOL_MAX_ATTEMPTS = int(os.environ.get('SPOOL_MAX_ATTEMPTS', '3'))
 SPOOL_BATCH_SIZE = int(os.environ.get('SPOOL_BATCH_SIZE', '100'))
 SPOOL_COMPLETED_RETENTION_DAYS = int(os.environ.get('SPOOL_COMPLETED_RETENTION_DAYS', '30'))
 SPOOL_HEALTH_MAX_AGE_SECONDS = int(os.environ.get('SPOOL_HEALTH_MAX_AGE_SECONDS', '300'))
+USEP_DATA_TEAM_EMAILS = parse_recipients(os.environ.get('USEP_DATA_TEAM_EMAILS_JSON', '[]'))
+USEP_DATA_TEAM_CC_EMAILS = parse_recipients(
+    os.environ.get('USEP_DATA_TEAM_CC_EMAILS_JSON', '[]'), setting_name='USEP_DATA_TEAM_CC_EMAILS_JSON'
+)
+USEP_DATA_TEAM_EMAIL_LABEL = os.environ.get('USEP_DATA_TEAM_EMAIL_LABEL', 'USEP indexer')
 README_URL = os.environ.get(
     'README_URL',
     'https://github.com/Brown-University-Library/usep_indexer_project',

@@ -192,7 +192,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 | Public version metadata | `usep_indexer_app/lib/version_helper.py` | `.git/HEAD` and Django cache behavior |
 | Tests and supported test entry point | `run_tests.py` | `usep_indexer_app/tests/` |
 | Integrated local listener check | `check_web_listener.py` | `tests/test_check_web_listener.py` |
-| Environment setting names | `config/dotenv_example_file.txt` | `config/settings.py`; never copy values from a real outer `.env` |
+| Environment setting names | `config/example.env` | `config/settings.py`; never copy values from a real outer `.env` |
 
 ### Request-to-index flows
 
@@ -253,7 +253,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - `/reindex_all/`, `/list_orphans/`, and orphan deletion are state-changing GET flows retained for legacy compatibility. `/list_orphans/` pulls and republishes public data before review; orphan deletion relies on that response putting all candidate IDs into a signed browser cookie.
 - `/processing_check/` compares `REMOTE_ADDR` directly with `LEGIT_IPS`; it is not proxy-header aware. `/info/`, `/version/`, and production `/error_check/` are public.
 - `/list_orphans/` deliberately omits configured filesystem and Solr locations from its HTML/JSON context. It exposes the public `usep-data` revision and a safe index label: Solr hostnames beginning with `d` display as dev, those beginning with `p` display as prod, and other hostnames use a neutral label. Preserve that information-disclosure boundary when changing the response context or template.
-- The main settings module asserts that `../.env` exists during import and loads it with `override=True`. JSON-suffixed values must be valid JSON, required email/log/cache values must exist even when not central to a command, and the log directory must already exist. Prefer absolute configured paths because unresolved relative paths depend on the process working directory. Use `config/dotenv_example_file.txt` for configuration shape, never a real outer `.env`.
+- The main settings module asserts that `../.env` exists during import and loads it with `override=True`. JSON-suffixed values must be valid JSON, required email/log/cache values must exist even when not central to a command, and the log directory must already exist. Prefer absolute configured paths because unresolved relative paths depend on the process working directory. Use `config/example.env` for configuration shape, never a real outer `.env`.
 - `USE_TZ` is false for Django-facing times, while spool document timestamps are timezone-aware UTC and queue filenames are rendered in `settings.TIME_ZONE`.
 - The version endpoint reads loose `.git/HEAD` and branch-ref files directly. A deployment without `.git`, with packed refs, or with a detached head can return fallback/detached metadata; results are cached briefly.
 
@@ -273,6 +273,6 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - This repository is public. Never add secrets, credentials, real webhook payloads, private URLs/hosts/IP allowlists, personal data, production filesystem paths, log excerpts, Solr responses, or queue event/status contents.
 - In the normal outer directory, `.env`, `backups/`, `logs/`, `spool_dir/`, and ad hoc payload/report files are local operational material. They may be inspected only when a task truly requires it and must not be copied into this repository or summarized with identifying values.
 - `temp_unified_inscriptions_dir/` and `webserved_data/` are generated data trees and can be large. Refer to their roles and configured setting names, not machine-specific contents.
-- `config/dotenv_example_file.txt` and `config/settings_run_tests.py` contain placeholders/test-only values and are the safe sources for documenting configuration shape.
+- `config/example.env` and `config/settings_run_tests.py` contain placeholders/test-only values and are the safe sources for documenting configuration shape.
 
 ---
