@@ -5,7 +5,7 @@ import logging
 from django.conf import settings
 from django.core.mail import mail_admins
 from django.core.management.base import BaseCommand, CommandError
-from usep_indexer_app.lib import spool
+from usep_indexer_app.lib import data_issue_email, spool
 
 
 log = logging.getLogger(__name__)
@@ -42,12 +42,16 @@ class Command(BaseCommand):
         Called by: Django management-command runner
         """
         del args, options
-        result = spool.process_spool(
-            settings.SPOOL_ROOT_PATH,
-            settings.SPOOL_BATCH_SIZE,
-            settings.SPOOL_MAX_ATTEMPTS,
-            settings.SPOOL_COMPLETED_RETENTION_DAYS,
-        )
+        with data_issue_email.collect_report() as report:
+            try:
+                result = spool.process_spool(
+                    settings.SPOOL_ROOT_PATH,
+                    settings.SPOOL_BATCH_SIZE,
+                    settings.SPOOL_MAX_ATTEMPTS,
+                    settings.SPOOL_COMPLETED_RETENTION_DAYS,
+                )
+            finally:
+                data_issue_email.email_report(report)
         output = json.dumps(dataclasses.asdict(result), sort_keys=True)
         if result.status == 'failed':
             email_job_failure(output)

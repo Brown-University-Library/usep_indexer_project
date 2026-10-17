@@ -11,7 +11,7 @@ from pathlib import Path
 
 from django.conf import settings
 from lxml import etree
-from usep_indexer_app.lib import indexer, orphans, processor
+from usep_indexer_app.lib import data_issue_email, indexer, orphans, processor
 
 
 log = logging.getLogger(__name__)
@@ -130,6 +130,7 @@ def update_all_index_entries(
     Called by: process_prepared_full_reindex()
     """
     document_batch_count = indexer.post_document_batches(documents, resources)
+    data_issue_email.finish_indexing()
     deletion_batch_count = 0
     if resources.document_failures:
         log.warning('Skipping stale-ID deletion because some inscriptions could not be indexed.')

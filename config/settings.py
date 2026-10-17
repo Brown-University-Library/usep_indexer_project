@@ -7,6 +7,7 @@ import os
 import pathlib
 
 from dotenv import find_dotenv, load_dotenv
+from usep_indexer_app.lib.data_issue_email import parse_recipients
 
 
 dotenv_path = pathlib.Path(__file__).resolve().parent.parent.parent / '.env'
@@ -73,6 +74,11 @@ STATIC_ROOT = os.environ['STATIC_ROOT']
 SERVER_EMAIL = os.environ['SERVER_EMAIL']
 EMAIL_HOST = os.environ['EMAIL_HOST']
 EMAIL_PORT = int(os.environ['EMAIL_PORT'])
+USEP_DATA_TEAM_EMAILS = parse_recipients(os.environ.get('USEP_DATA_TEAM_EMAILS_JSON', '[]'))
+USEP_DATA_TEAM_CC_EMAILS = parse_recipients(
+    os.environ.get('USEP_DATA_TEAM_CC_EMAILS_JSON', '[]'), setting_name='USEP_DATA_TEAM_CC_EMAILS_JSON'
+)
+USEP_DATA_TEAM_EMAIL_LABEL = os.environ.get('USEP_DATA_TEAM_EMAIL_LABEL', 'USEP indexer')
 
 CACHES = json.loads(os.environ['CACHES_JSON'])
 

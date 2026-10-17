@@ -58,6 +58,9 @@ SERVER_EMAIL = 'test@example.org'
 EMAIL_HOST = 'localhost'
 EMAIL_PORT = 1025
 EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+USEP_DATA_TEAM_EMAILS: list[str] = []
+USEP_DATA_TEAM_CC_EMAILS: list[str] = []
+USEP_DATA_TEAM_EMAIL_LABEL = 'Test'
 
 CACHES = {
     'default': {

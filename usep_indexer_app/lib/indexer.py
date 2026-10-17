@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 from django.conf import settings
 from lxml import etree
-from usep_indexer_app.lib import bibliography, solr_client, transcription
+from usep_indexer_app.lib import bibliography, data_issue_email, solr_client, transcription
 
 
 log = logging.getLogger(__name__)
@@ -70,8 +70,17 @@ OPTIONAL_OMIT_IF_EMPTY_FIELDS = {
 
 class SolrDocumentValidationError(ValueError):
     """
-    Identifies a locally built document that violates the minimum public-webapp contract.
+    Identifies a locally built document that violates the minimum public-webapp requirements.
     """
+
+    def __init__(self, message: str, *, category: str = 'document_validation') -> None:
+        """
+        Keeps a stable data-review category separate from the operational error message.
+
+        Called by: document construction and validation functions
+        """
+        super().__init__(message)
+        self.category = category
 
 
 class InscriptionProcessingError(ValueError):
@@ -258,6 +267,7 @@ def build_complete_documents(inscription_paths: Sequence[Path], resources: Index
 
     Called by: update_index(), reindex.process_prepared_full_reindex()
     """
+    data_issue_email.start_indexing(resources.data_revision, len(inscription_paths))
     documents: list[etree._Element] = []
     for inscription_path in inscription_paths:
         try:
@@ -266,6 +276,14 @@ def build_complete_documents(inscription_paths: Sequence[Path], resources: Index
             detail = f'{inscription_path.stem}: {type(error).__name__}: {error}'
             resources.document_failures.append(detail)
             log.warning(f'Inscription skipped; detail, ``{detail}``', exc_info=True)
+            category: str | None = None
+            if isinstance(error, SolrDocumentValidationError):
+                category = error.category
+            elif isinstance(error, (etree.XMLSyntaxError, UnicodeError)):
+                category = 'xml_parse'
+            elif isinstance(error, etree.XSLTApplyError):
+                category = 'xml_transform'
+            data_issue_email.record_failure(inscription_path.name, category)
         else:
             documents.append(document)
     return documents
@@ -300,8 +318,14 @@ def post_document_or_record_failure(document: etree._Element, resources: Indexin
         detail = f'{inscription_id}: Solr rejected the document (HTTP 400): {error.response.text[:1000]}'
         resources.document_failures.append(detail)
         log.warning(f'Inscription skipped; detail, ``{detail}``')
+        category: str | None = None
+        if 'Error adding field' in error.response.text and 'For input string:' in error.response.text:
+            if "'notBefore'" in error.response.text or "'notAfter'" in error.response.text:
+                category = 'invalid_year'
+        data_issue_email.record_failure(f'{inscription_id}.xml', category)
     else:
         posted = True
+        data_issue_email.record_accepted(1)
     return posted
 
 
@@ -395,10 +419,13 @@ def validate_document_id(document: etree._Element, expected_id: str) -> None:
     """
     id_values = field_values(document, 'id')
     if len(id_values) != 1 or not id_values[0].strip():
-        raise SolrDocumentValidationError('A complete Solr document must contain exactly one nonempty id field.')
+        raise SolrDocumentValidationError(
+            'A complete Solr document must contain exactly one nonempty id field.', category='id_missing'
+        )
     if id_values[0] != expected_id:
         raise SolrDocumentValidationError(
-            f'Solr document id {id_values[0]!r} does not match inscription filename stem {expected_id!r}.'
+            f'Solr document id {id_values[0]!r} does not match inscription filename stem {expected_id!r}.',
+            category='id_mismatch',
         )
     return
 
@@ -427,7 +454,10 @@ def validate_complete_document(document: etree._Element, expected_id: str, trans
             raise SolrDocumentValidationError(f'Solr field {field_name!r} must occur exactly once.')
     for field_name in OPTIONAL_SINGLE_FIELDS:
         if len(field_values(document, field_name)) > 1:
-            raise SolrDocumentValidationError(f'Solr field {field_name!r} cannot occur more than once.')
+            raise SolrDocumentValidationError(
+                f'Solr field {field_name!r} cannot occur more than once.',
+                category='multiple_graphics' if field_name == 'graphic_name' else 'multiple_values',
+            )
 
     status = field_values(document, 'status')[0]
     if status not in VALID_STATUSES:
@@ -435,7 +465,8 @@ def validate_complete_document(document: etree._Element, expected_id: str, trans
     if (status == 'transcription') != bool(transcription_value):
         raise SolrDocumentValidationError(
             f'Status/transcription mismatch for {expected_id!r}: status is {status!r} and '
-            f'transcription_present is {bool(transcription_value)!r}.'
+            f'transcription_present is {bool(transcription_value)!r}.',
+            category='transcription_status',
         )
     if transcription_value and transcription_value not in field_values(document, FULL_TEXT_FIELD):
         raise SolrDocumentValidationError('Normalized transcription must be present in the full-text field.')
@@ -460,9 +491,11 @@ def validate_and_normalize_dates(document: etree._Element) -> None:
             try:
                 date_values[field_name] = int(values[0])
             except ValueError as error:
-                raise SolrDocumentValidationError(f'Solr field {field_name!r} must contain an integer year.') from error
+                raise SolrDocumentValidationError(
+                    f'Solr field {field_name!r} must contain an integer year.', category='invalid_year'
+                ) from error
     if 'notBefore' in date_values and 'notAfter' in date_values and date_values['notBefore'] > date_values['notAfter']:
-        raise SolrDocumentValidationError('notBefore cannot be greater than notAfter.')
+        raise SolrDocumentValidationError('notBefore cannot be greater than notAfter.', category='date_range')
     for field_name, year in date_values.items():
         replace_field_values(document, field_name, [str(year)])
     return
@@ -586,6 +619,7 @@ def update_index(
                 f'elapsed_seconds, ``{elapsed_seconds:.3f}``; commit_within_ms, '
                 f'``{resources.solr.commit_within_ms}``'
             )
+        data_issue_email.finish_indexing()
         delete_id_batches(ids_to_remove, resources)
         log.info(
             f'Incremental Solr indexing finished; document_count, ``{posted_count}``; '
@@ -623,6 +657,7 @@ def post_document_batches(documents: Sequence[etree._Element], resources: Indexi
                 f'last_id, ``{last_id}``; data_revision, ``{resources.data_revision}``'
             )
             raise
+        data_issue_email.record_accepted(len(document_batch))
         batch_count += 1
         elapsed_seconds = time.monotonic() - batch_started
         log.info(
