@@ -208,13 +208,24 @@ def build_message(report: RunReport) -> str:
         f'Inscriptions with recorded failures: {report.failed_count}',
         f'Inscriptions listed for data review: {len(report.issues)}',
         '',
-        'These findings may require XML, stylesheet, or indexer changes; they do not assign responsibility.',
         'Retries report the same unresolved problems again. This email does not mean new problems were introduced.',
     ]
     if not report.indexing_finished:
         lines.append('Processing stopped early. These counts and findings cover only the work completed so far.')
     if report.failed_count > len(report.issues):
         lines.append('Other failures require technical review and are included only in the administrator report.')
+    lines.extend(
+        [
+            '',
+            (
+                'These findings may require changes to the source XML, the XSL stylesheets, '
+                'the Python indexing application, or the Solr configuration. '
+                'They do not necessarily indicate mistakes in the source data.'
+            ),
+            '',
+            'The issues...',
+        ]
+    )
     for category, (title, explanation) in ISSUE_DESCRIPTIONS.items():
         issues = sorted((issue for issue in report.issues if issue.category == category), key=lambda issue: issue.filename)
         if issues:
