@@ -26,6 +26,7 @@ If other instruction files exist (Copilot, IDE rules, contributor docs) and conf
     - `uv run ./run_tests.py`
         - Note that `run_tests.py` has usage instructions about how to run more granular tests.
 - Run django management scripts via: `uv run ./manage.py THE-COMMAND`
+- For local editor/type checking, run `uv sync --group local` and select the project's `.venv` interpreter. The local group includes `types-lxml`, which supplies type definitions for lxml's compiled `etree` module. Keep this group installed when syncing the development environment; do not rely on temporary external stubs to verify what Pylance sees.
 
 
 ## Coding directives (Python)
@@ -243,6 +244,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 
 ### Failure boundaries and compatibility gotchas
 
+- The indexer replaces `graphic_name` with the first nonempty `facsimile/surface/graphic/@url` in XML document order across all facsimile groups and surfaces. If an attribute lists whitespace-separated URLs, only the first URL is used, preserving the existing stylesheet behavior. Missing or blank URLs are skipped; no image field is emitted if none remain. Images are not fetched or checked for existence, and source/public XML retains all images for the detail page. Multiple images alone do not fail indexing or trigger error email; unrelated validation still applies.
 - Numeric `notBefore` and `notAfter` values are validated and written as plain integer strings in the Solr document. This removes surrounding whitespace, leading zeroes, and a leading plus sign without changing the year. Non-integer dates and reversed ranges still fail validation. Source XML and descriptive date fields are unchanged.
 - Individual inscription parse, transformation, bibliography, transcription, and document-validation failures are warned about and retained while other documents are built and posted. Solr HTTP 400 document rejections are isolated; full batches are retried individually when needed. After valid work finishes, `InscriptionProcessingError` fails the whole claimed queue batch so the existing retry and email behavior applies. Single-inscription refresh remains strict. Failures loading shared XSL/bibliography resources, Git, `rsync`, Solr service/connectivity, or deletions still propagate immediately.
 - Bibliography, transcription, and validation complete before a document post, so a local construction failure leaves the preceding Solr representation unchanged. Full rebuilds finish all local document attempts before querying or mutating Solr and skip stale-ID deletion whenever any inscription fails. Public XML/resources are still mirrored before indexing, including malformed source files; preserving Solr does not preserve earlier public files. Successful Solr updates remain in place after a later failure, so retries must remain safe to repeat.

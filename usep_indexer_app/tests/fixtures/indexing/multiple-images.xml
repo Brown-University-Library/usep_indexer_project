@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <publicationStmt><idno xml:id="multiple-images"/></publicationStmt>
+      <sourceDesc><msDesc><physDesc><objectDesc>stone</objectDesc></physDesc></msDesc></sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <facsimile>
+    <surface><graphic/><graphic url=" "/></surface>
+    <surface><graphic url="https://images.example.org/first.jpg"/><graphic url="second.jpg"/></surface>
+  </facsimile>
+  <facsimile><surface><graphic url="third.jpg"/></surface></facsimile>
+  <text><body><div type="edition"/></body></text>
+</TEI>

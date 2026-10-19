@@ -12,7 +12,9 @@ dependencies = [
 ]
 
 [dependency-groups]
-local = []
+local = [
+    "types-lxml>=2026.2.16",
+]
 staging = []
 prod = []
 ci_tests = []

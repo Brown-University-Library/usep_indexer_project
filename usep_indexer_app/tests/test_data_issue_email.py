@@ -71,7 +71,6 @@ class DataIssueEmailTests(SimpleTestCase):
                         call_command('process_spool', stdout=io.StringIO())
                 else:
                     call_command('process_spool', stdout=io.StringIO())
-        return
 
     def team_messages(self) -> list[mail.EmailMessage]:
         """
@@ -150,6 +149,45 @@ class DataIssueEmailTests(SimpleTestCase):
         self.assertNotIn('SolrDocumentValidationError', body)
         self.assertNotIn(str(FIXTURE_PATH), body)
 
+    def test_multiple_images_are_indexed_without_failure_email_or_retry(self) -> None:
+        """
+        Checks multiple image groups with empty entries complete normally in both queue workflows.
+        """
+        content = (FIXTURE_PATH / 'multiple-images.xml').read_bytes()
+        path = self.add_inscription('multiple-images.xml', content)
+        for event_type in ('incremental', 'full_reindex'):
+            with self.subTest(event_type=event_type):
+                self.handler.reset_mock()
+                self.handler.side_effect = (
+                    [httpx.Response(200, json={'response': {'docs': []}}), httpx.Response(200, text='ok')]
+                    if event_type == 'full_reindex'
+                    else [httpx.Response(200, text='ok')]
+                )
+                spool.write_event(self.spool_root, event_type, files_updated=[path] if event_type == 'incremental' else None)
+                self.run_processor(fails=False)
+                request: httpx.Request = self.handler.call_args.args[0]
+                document = etree.fromstring(request.content)
+                self.assertEqual(
+                    ['https://images.example.org/first.jpg'], document.xpath('./doc/field[@name="graphic_name"]/text()')
+                )
+                self.assertEqual(content, (self.inscriptions / 'multiple-images.xml').read_bytes())
+                self.assertEqual([], list((self.spool_root / 'pending').glob('*.json')))
+        self.assertEqual(2, len(list((self.spool_root / 'completed').glob('*.json'))))
+        self.assertEqual([], vars(mail)['outbox'])
+
+    def test_multiple_images_do_not_hide_unrelated_inscription_failures(self) -> None:
+        """
+        Checks an ID mismatch still triggers the editor email and retry for a multiple-image inscription.
+        """
+        path = self.add_inscription('wrong-id.xml', (FIXTURE_PATH / 'multiple-images.xml').read_bytes())
+        spool.write_event(self.spool_root, 'incremental', files_updated=[path])
+        self.run_processor()
+        body = self.team_messages()[0].body
+        self.assertIn('XML ID and filename differ (1)', body)
+        self.assertNotIn('More than one image value', body)
+        self.assertEqual(1, len(list((self.spool_root / 'pending').glob('*.json'))))
+        self.handler.assert_not_called()
+
     def test_disabled_recipients_leave_admin_email_and_retry_unchanged(self) -> None:
         """
         Checks an empty recipient list disables only the data-team notification.
@@ -187,11 +225,13 @@ class DataIssueEmailTests(SimpleTestCase):
         Checks outages, unknown Solr fields, and unexpected code errors do not reach editors.
         """
         for error in (RuntimeError('private server details'), OSError('private filesystem details')):
-            with self.subTest(error=type(error).__name__):
-                with patch.object(indexer, 'build_complete_document', side_effect=error):
-                    path = self.add_inscription('metadata.xml', (FIXTURE_PATH / 'metadata.xml').read_bytes())
-                    spool.write_event(self.spool_root, 'incremental', files_updated=[path])
-                    self.run_processor()
+            with (
+                self.subTest(error=type(error).__name__),
+                patch.object(indexer, 'build_complete_document', side_effect=error),
+            ):
+                path = self.add_inscription('metadata.xml', (FIXTURE_PATH / 'metadata.xml').read_bytes())
+                spool.write_event(self.spool_root, 'incremental', files_updated=[path])
+                self.run_processor()
         self.assertEqual([], self.team_messages())
         for status in (400, 503):
             with self.subTest(status=status):
@@ -289,9 +329,8 @@ class DataIssueEmailTests(SimpleTestCase):
             data_issue_email.parse_recipients('["editor@example.org", "editor@example.org"]'),
         )
         for value in ('null', '"editor@example.org"', '{}', '[3]', '["bad-address"]', 'invalid JSON'):
-            with self.subTest(value=value):
-                with self.assertRaises(ImproperlyConfigured):
-                    data_issue_email.parse_recipients(value)
+            with self.subTest(value=value), self.assertRaises(ImproperlyConfigured):
+                data_issue_email.parse_recipients(value)
 
     def test_optional_cc_recipients_receive_the_same_report_in_the_cc_header(self) -> None:
         """
@@ -318,10 +357,9 @@ class DataIssueEmailTests(SimpleTestCase):
         """
         Checks a later command cannot inherit the preceding command's failures.
         """
-        with self.assertRaises(RuntimeError):
-            with data_issue_email.collect_report():
-                data_issue_email.record_failure('broken.xml', 'xml_parse')
-                raise RuntimeError('stop')
+        with self.assertRaises(RuntimeError), data_issue_email.collect_report():
+            data_issue_email.record_failure('broken.xml', 'xml_parse')
+            raise RuntimeError('stop')
         data_issue_email.record_failure('outside.xml', 'xml_parse')
         with data_issue_email.collect_report() as report:
             self.assertEqual([], report.issues)
@@ -335,7 +373,6 @@ class DataIssueEmailTests(SimpleTestCase):
             ({'id': []}, 'id_missing'),
             ({'notBefore': ['200'], 'notAfter': ['100']}, 'date_range'),
             ({'notAfter': ['unknown']}, 'invalid_year'),
-            ({'graphic_name': ['one.jpg', 'two.jpg']}, 'multiple_graphics'),
             ({'msid_region': ['one', 'two']}, 'multiple_values'),
             ({'status': ['transcription']}, 'transcription_status'),
         ]

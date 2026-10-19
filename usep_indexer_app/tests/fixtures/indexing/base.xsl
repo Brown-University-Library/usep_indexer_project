@@ -19,6 +19,9 @@
           <xsl:otherwise><field name="status">bib_only</field></xsl:otherwise>
         </xsl:choose>
         <field name="researcher_extension">second</field>
+        <xsl:for-each select="/tei:TEI/tei:facsimile">
+          <field name="graphic_name"><xsl:value-of select="tei:surface/tei:graphic/@url"/></field>
+        </xsl:for-each>
       </doc>
     </add>
   </xsl:template>

@@ -6,8 +6,8 @@ from unittest.mock import Mock, patch
 import httpx
 from django.test import SimpleTestCase, override_settings
 from lxml import etree
-from usep_indexer_app.lib import bibliography, indexer, processor, solr_client, stylesheet_dependencies, transcription
 
+from usep_indexer_app.lib import bibliography, indexer, processor, solr_client, stylesheet_dependencies, transcription
 
 FIXTURE_PATH = pathlib.Path(__file__).parent / 'fixtures' / 'indexing'
 
@@ -82,6 +82,59 @@ class IndexingRefactorTests(SimpleTestCase):
         self.assertEqual(['unicode-Δ', 'parent'], indexer.field_values(transcribed_document, 'bib_ids'))
         self.assertEqual([], indexer.field_values(metadata_document, 'transcription'))
         handler.assert_not_called()
+
+    def test_complete_update_selects_first_nonempty_image_and_preserves_source(self) -> None:
+        """
+        Checks image layouts post at most one URL without changing XML or fetching images.
+        """
+        cases = [
+            ('', []),
+            ('<facsimile><surface><graphic/><graphic url=" "/></surface></facsimile>', []),
+            ('<facsimile><surface><graphic url="only.jpg"/></surface></facsimile>', ['only.jpg']),
+            (
+                '<facsimile><surface><graphic url="first.jpg"/><graphic url="second.jpg"/></surface></facsimile>',
+                ['first.jpg'],
+            ),
+            (
+                (
+                    '<facsimile><surface><graphic url="z.jpg"/></surface>'
+                    '<surface><graphic url="a.jpg"/></surface></facsimile>'
+                ),
+                ['z.jpg'],
+            ),
+            (
+                (
+                    '<facsimile><surface><graphic url="first.jpg"/></surface></facsimile>'
+                    '<facsimile><surface><graphic url="second.jpg"/></surface></facsimile>'
+                ),
+                ['first.jpg'],
+            ),
+            (
+                '<facsimile><surface><graphic url=" first.jpg second.jpg "/></surface></facsimile>',
+                ['first.jpg'],
+            ),
+        ]
+        handler = Mock(return_value=httpx.Response(200, text='ok'))
+        resources = build_resources(self.make_http_client(handler))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            public_path = pathlib.Path(temporary_directory)
+            inscriptions_path = public_path / 'inscriptions'
+            inscriptions_path.mkdir()
+            for images, expected_urls in cases:
+                with self.subTest(images=images):
+                    handler.reset_mock()
+                    content = (FIXTURE_PATH / 'metadata.xml').read_text().replace('<text>', f'{images}<text>')
+                    inscription_path = inscriptions_path / 'metadata.xml'
+                    inscription_path.write_text(content)
+                    with override_settings(WEBSERVED_DATA_DIR_PATH=public_path):
+                        indexer.update_index_entry('metadata.xml', resources=resources)
+                    handler.assert_called_once()
+                    request: httpx.Request = handler.call_args.args[0]
+                    self.assertEqual('POST', request.method)
+                    self.assertEqual('solr.example.org', request.url.host)
+                    update_xml = etree.fromstring(request.content)
+                    self.assertEqual(expected_urls, update_xml.xpath('./doc/field[@name="graphic_name"]/text()'))
+                    self.assertEqual(content, inscription_path.read_text())
 
     def test_complete_builder_includes_nested_edition_blocks(self) -> None:
         """
@@ -269,9 +322,11 @@ class IndexingRefactorTests(SimpleTestCase):
                 (FIXTURE_PATH / 'metadata.xml').read_text(encoding='utf-8'),
                 encoding='utf-8',
             )
-            with override_settings(WEBSERVED_DATA_DIR_PATH=public_data_path):
-                with self.assertRaisesRegex(indexer.SolrDocumentValidationError, 'does not match'):
-                    indexer.update_index_entry('wrong-filename.xml', resources=resources)
+            with (
+                override_settings(WEBSERVED_DATA_DIR_PATH=public_data_path),
+                self.assertRaisesRegex(indexer.SolrDocumentValidationError, 'does not match'),
+            ):
+                indexer.update_index_entry('wrong-filename.xml', resources=resources)
 
         handler.assert_not_called()
 
@@ -387,9 +442,11 @@ class IndexingRefactorTests(SimpleTestCase):
                 (FIXTURE_PATH / 'transcribed.xml').read_text(encoding='utf-8'),
                 encoding='utf-8',
             )
-            with override_settings(WEBSERVED_DATA_DIR_PATH=public_data_path):
-                with self.assertRaises(httpx.HTTPStatusError):
-                    indexer.update_index_entry('transcribed.xml', resources=resources)
+            with (
+                override_settings(WEBSERVED_DATA_DIR_PATH=public_data_path),
+                self.assertRaises(httpx.HTTPStatusError),
+            ):
+                indexer.update_index_entry('transcribed.xml', resources=resources)
         handler.assert_called_once()
 
     def test_batch_posting_and_deletion_have_bounded_request_counts(self) -> None:

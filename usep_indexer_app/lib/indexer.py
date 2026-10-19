@@ -2,7 +2,7 @@
 Builds complete USEP Solr documents locally and coordinates index mutations.
 
 The configured researcher-owned base XSL remains the general field authority. This module preserves
-its ``doc`` output, replaces cross-resource bibliography values, and adds transcription to search text.
+its ``doc`` output, selects one source image, replaces bibliography values, and adds transcription to search text.
 It removes the separate transcription field, validates the public webapp's required fields, and only
 then sends an update to Solr.
 """
@@ -13,12 +13,13 @@ import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Self
 
 import httpx
 from django.conf import settings
 from lxml import etree
-from usep_indexer_app.lib import bibliography, data_issue_email, solr_client, transcription
 
+from usep_indexer_app.lib import bibliography, data_issue_email, solr_client, transcription
 
 log = logging.getLogger(__name__)
 INDEXED_SOURCE_DIRECTORIES = {'bib_only', 'metadata_only', 'transcribed'}
@@ -151,7 +152,7 @@ class IndexingResources:
         )
         return resources
 
-    def __enter__(self) -> 'IndexingResources':
+    def __enter__(self) -> Self:
         """
         Returns the run-scoped resources for a context.
 
@@ -167,7 +168,6 @@ class IndexingResources:
         """
         del exception_details
         self.close()
-        return
 
     def close(self) -> None:
         """
@@ -176,7 +176,6 @@ class IndexingResources:
         Called by: __exit__()
         """
         self.solr.close()
-        return
 
 
 def load_transformer(xsl_path: Path) -> etree.XSLT:
@@ -234,6 +233,8 @@ def build_complete_document(inscription_path: Path, resources: IndexingResources
     inscription_xml = parse_inscription(inscription_path)
     document = transform_to_document(inscription_xml, resources.base_transformer)
     validate_document_id(document, inscription_path.stem)
+    image_url = first_image_url(inscription_xml)
+    replace_field_values(document, 'graphic_name', [image_url] if image_url is not None else [])
 
     direct_bibliography_ids, extraction_diagnostics = bibliography.extract_direct_bibliography_ids(inscription_xml)
     complete_bibliography_ids, resolution_diagnostics = bibliography.resolve_bibliography_ids(
@@ -260,6 +261,25 @@ def build_complete_document(inscription_path: Path, resources: IndexingResources
         f'elapsed_seconds, ``{elapsed_seconds:.3f}``; data_revision, ``{resources.data_revision}``'
     )
     return document
+
+
+def first_image_url(inscription_xml: etree._ElementTree) -> str | None:
+    """
+    Selects the first nonempty facsimile image URL in document order without fetching images.
+
+    Called by: build_complete_document()
+    """
+    graphics: list[etree._Element] = inscription_xml.xpath(
+        '/tei:TEI/tei:facsimile/tei:surface/tei:graphic', namespaces={'tei': 'http://www.tei-c.org/ns/1.0'}
+    )
+    image_url = None
+    for graphic in graphics:
+        urls = (graphic.get('url') or '').split()
+        if urls:
+            ## preserves the existing stylesheet's first-URL behavior for space-separated URL lists.
+            image_url = urls[0]
+            break
+    return image_url
 
 
 def build_complete_documents(inscription_paths: Sequence[Path], resources: IndexingResources) -> list[etree._Element]:
@@ -322,9 +342,12 @@ def post_document_or_record_failure(document: etree._Element, resources: Indexin
         resources.document_failures.append(detail)
         log.warning(f'Inscription skipped; detail, ``{detail}``')
         category: str | None = None
-        if 'Error adding field' in error.response.text and 'For input string:' in error.response.text:
-            if "'notBefore'" in error.response.text or "'notAfter'" in error.response.text:
-                category = 'invalid_year'
+        if (
+            'Error adding field' in error.response.text
+            and 'For input string:' in error.response.text
+            and ("'notBefore'" in error.response.text or "'notAfter'" in error.response.text)
+        ):
+            category = 'invalid_year'
         data_issue_email.record_failure(f'{inscription_id}.xml', category)
     else:
         posted = True
@@ -374,7 +397,6 @@ def replace_field_values(document: etree._Element, field_name: str, values: Sequ
         field_element.text = value
         document.insert(insertion_index, field_element)
         insertion_index += 1
-    return
 
 
 def append_field_value(
@@ -394,7 +416,6 @@ def append_field_value(
     if not deduplicate or value not in field_values(document, field_name):
         field_element = etree.SubElement(document, 'field', name=field_name)
         field_element.text = value
-    return
 
 
 def omit_empty_optional_fields(document: etree._Element) -> None:
@@ -406,12 +427,11 @@ def omit_empty_optional_fields(document: etree._Element) -> None:
     field_elements: list[etree._Element] = document.xpath('./field')
     for field_element in field_elements:
         field_name = field_element.get('name') or ''
-        is_dynamic_contract_field = field_name.startswith('c_') or field_name.startswith('name_')
+        is_dynamic_contract_field = field_name.startswith(('c_', 'name_'))
         if (field_name in OPTIONAL_OMIT_IF_EMPTY_FIELDS or is_dynamic_contract_field) and not (
             field_element.text or ''
         ).strip():
             document.remove(field_element)
-    return
 
 
 def validate_document_id(document: etree._Element, expected_id: str) -> None:
@@ -431,7 +451,6 @@ def validate_document_id(document: etree._Element, expected_id: str) -> None:
             category='id_mismatch',
             document_id=id_values[0],
         )
-    return
 
 
 def validate_complete_document(document: etree._Element, expected_id: str, transcription_value: str) -> None:
@@ -446,10 +465,10 @@ def validate_complete_document(document: etree._Element, expected_id: str, trans
         field_name = field_element.get('name')
         if not field_name:
             raise SolrDocumentValidationError('Every Solr field element must have a nonempty name attribute.')
-        is_dynamic_contract_field = field_name.startswith('c_') or field_name.startswith('name_')
-        if (
-            field_name in OPTIONAL_OMIT_IF_EMPTY_FIELDS or is_dynamic_contract_field
-        ) and not (field_element.text or '').strip():
+        is_dynamic_contract_field = field_name.startswith(('c_', 'name_'))
+        if (field_name in OPTIONAL_OMIT_IF_EMPTY_FIELDS or is_dynamic_contract_field) and not (
+            field_element.text or ''
+        ).strip():
             raise SolrDocumentValidationError(f'Solr field {field_name!r} cannot have an empty value.')
 
     for field_name in REQUIRED_SINGLE_FIELDS:
@@ -479,7 +498,6 @@ def validate_complete_document(document: etree._Element, expected_id: str, trans
     bibliography_values = field_values(document, 'bib_ids')
     if len(bibliography_values) != len(set(bibliography_values)):
         raise SolrDocumentValidationError('The bib_ids field cannot contain duplicate values.')
-    return
 
 
 def validate_and_normalize_dates(document: etree._Element) -> None:
@@ -502,7 +520,6 @@ def validate_and_normalize_dates(document: etree._Element) -> None:
         raise SolrDocumentValidationError('notBefore cannot be greater than notAfter.', category='date_range')
     for field_name, year in date_values.items():
         replace_field_values(document, field_name, [str(year)])
-    return
 
 
 def update_index_entry(
@@ -521,7 +538,6 @@ def update_index_entry(
             post_one_index_entry(filename, loaded_resources)
     else:
         post_one_index_entry(filename, resources)
-    return
 
 
 def post_one_index_entry(filename: str, resources: IndexingResources) -> None:
@@ -537,8 +553,7 @@ def post_one_index_entry(filename: str, resources: IndexingResources) -> None:
         resources.solr.post_documents([document])
     except Exception:
         log.error(
-            f'Solr complete-document update failed; filename, ``{filename}``; '
-            f'data_revision, ``{resources.data_revision}``'
+            f'Solr complete-document update failed; filename, ``{filename}``; data_revision, ``{resources.data_revision}``'
         )
         raise
     elapsed_seconds = time.monotonic() - post_started
@@ -546,7 +561,6 @@ def post_one_index_entry(filename: str, resources: IndexingResources) -> None:
         f'Solr complete-document update completed; inscription_id, ``{inscription_path.stem}``; '
         f'document_count, ``1``; elapsed_seconds, ``{elapsed_seconds:.3f}``; request_count, ``1``'
     )
-    return
 
 
 def should_index_path(file_path: str) -> bool:
@@ -587,8 +601,10 @@ def update_index(
     Called by: processor.process_incremental()
     """
     filenames = affected_filenames(files_updated, files_removed)
-    ignored_path_count = len(files_updated) + len(files_removed) - sum(
-        should_index_path(file_path) for file_path in [*files_updated, *files_removed]
+    ignored_path_count = (
+        len(files_updated)
+        + len(files_removed)
+        - sum(should_index_path(file_path) for file_path in [*files_updated, *files_removed])
     )
     log.debug(
         f'Filtered incremental Solr changes; affected_filename_count, ``{len(filenames)}``; '
