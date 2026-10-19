@@ -160,9 +160,9 @@ class IndexingResilienceTests(SimpleTestCase):
         self.assertIn('../resources/', valid_path.read_text(encoding='utf-8'))
         self.assertEqual(b'<TEI>\xff</TEI>', broken_path.read_bytes())
 
-    def test_partial_queue_run_retains_retry_and_sends_one_summary_email(self) -> None:
+    def test_partial_queue_run_retains_retry_without_premature_email(self) -> None:
         """
-        Checks a good inscription is posted before the failed event is retained and reported by email.
+        Checks a good inscription is posted before the failed event is retained for a silent retry.
         """
         (self.inscriptions_path / 'broken.xml').write_bytes(b'<TEI>')
         spool_root = self.root / 'spool'
@@ -189,5 +189,4 @@ class IndexingResilienceTests(SimpleTestCase):
         self.assertEqual(1, pending['attempts'])
         self.assertIn('broken', pending['last_error'])
         outbox: list[mail.EmailMessage] = vars(mail)['outbox']
-        self.assertEqual(1, len(outbox))
-        self.assertIn('broken', outbox[0].body)
+        self.assertEqual([], outbox)

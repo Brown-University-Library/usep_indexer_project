@@ -10,6 +10,7 @@ from django.core import mail
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
+
 from usep_indexer_app.lib import spool
 
 
@@ -323,53 +324,85 @@ class SpoolTests(SimpleTestCase):
         result = json.loads(output.getvalue())
         self.assertEqual('success', result['status'])
         self.assertEqual(0, result['claimed'])
-        self.assertEqual([], mail.outbox)
+        self.assertEqual([], vars(mail)['outbox'])
 
     @override_settings(ADMINS=[('Test Admin', 'admin@example.org')])
-    @patch(
-        'usep_indexer_app.management.commands.process_spool.spool.process_spool',
-        return_value=spool.ProcessResult(status='failed', claimed=1, retried=1, error='XMLSyntaxError: malformed XML'),
-    )
-    def test_management_command_emails_admins_once_on_job_failure(self, mock_process) -> None:
+    def test_data_only_failures_never_send_a_separate_admin_email(self) -> None:
         """
-        Checks that one failed job sends one summary email before raising.
+        Checks both retryable and exhausted failures raise without sending an administrator notification.
         """
-        with self.assertRaises(CommandError):
-            call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
-
-        self.assertEqual(1, len(mail.outbox))
-        self.assertIn('USEP spool-processing job failed', mail.outbox[0].subject)
-        self.assertIn('"status": "failed"', mail.outbox[0].body)
-        self.assertIn('XMLSyntaxError: malformed XML', mail.outbox[0].body)
-        mock_process.assert_called_once()
-
-    @patch(
-        'usep_indexer_app.management.commands.process_spool.mail_admins',
-        side_effect=RuntimeError('mail server unavailable'),
-    )
-    @patch(
-        'usep_indexer_app.management.commands.process_spool.spool.process_spool',
-        return_value=spool.ProcessResult(status='failed', claimed=1, retried=1, error='XMLSyntaxError: malformed XML'),
-    )
-    def test_email_delivery_failure_does_not_hide_job_failure(self, mock_process, mock_mail_admins) -> None:
-        """
-        Checks that an email-backend error is logged before the failed command raises.
-        """
-        with self.assertLogs('usep_indexer_app.management.commands.process_spool', level='ERROR') as captured_logs:
-            with self.assertRaises(CommandError):
+        for failed, retried in ((0, 1), (1, 0), (0, 0)):
+            result = spool.ProcessResult(status='failed', claimed=1, failed=failed, retried=retried, error='XML error')
+            with (
+                self.subTest(failed=failed, retried=retried),
+                patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', return_value=result),
+                self.assertRaisesRegex(CommandError, 'XML error'),
+            ):
                 call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+        self.assertEqual([], vars(mail)['outbox'])
 
-        self.assertIn('Unable to email Django admins', '\n'.join(captured_logs.output))
-        mock_process.assert_called_once()
-        mock_mail_admins.assert_called_once_with(
-            'USEP spool-processing job failed',
-            (
-                'The USEP spool-processing job failed.\n\nProcessor result:\n'
-                '{"claimed": 1, "cleaned": 0, "error": "XMLSyntaxError: malformed XML", "failed": 0, '
-                '"processed": 0, "quarantined": 0, "retried": 1, "status": "failed"}'
-            ),
-            fail_silently=False,
-        )
+    @override_settings(ADMINS=[('Test Admin', 'admin@example.org')])
+    def test_unexpected_processor_exception_alerts_admins_when_attempts_cannot_be_recorded(self) -> None:
+        """
+        Checks setup errors that cannot use queue retries alert administrators without a data-team report.
+        """
+        with (
+            patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', side_effect=OSError('disk full')),
+            self.assertRaisesRegex(OSError, 'disk full'),
+        ):
+            call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+        outbox: list[mail.EmailMessage] = vars(mail)['outbox']
+        self.assertEqual(1, len(outbox))
+        self.assertEqual(['admin@example.org'], outbox[0].to)
+        self.assertIn('disk full', outbox[0].body)
+
+    @override_settings(ADMINS=[('Test Admin', 'admin@example.org')], SPOOL_MAX_ATTEMPTS=2)
+    def test_source_preparation_failure_retries_before_alerting_admins(self) -> None:
+        """
+        Checks failures before inscription processing use the same final-attempt notification policy.
+        """
+        with tempfile.TemporaryDirectory() as directory, override_settings(SPOOL_ROOT_PATH=Path(directory)):
+            spool.write_event(Path(directory), 'full_reindex')
+            with patch('usep_indexer_app.lib.spool.reindex.process_full_reindex', side_effect=RuntimeError('Git unavailable')):
+                with self.assertRaisesRegex(CommandError, 'Git unavailable'):
+                    call_command('process_spool')
+                self.assertEqual([], vars(mail)['outbox'])
+                with self.assertRaisesRegex(CommandError, 'Git unavailable'):
+                    call_command('process_spool')
+            outbox: list[mail.EmailMessage] = vars(mail)['outbox']
+            self.assertEqual(1, len(outbox))
+            self.assertEqual(['admin@example.org'], outbox[0].to)
+
+    @override_settings(ADMINS=[('Test Admin', 'admin@example.org')], SPOOL_MAX_ATTEMPTS=2)
+    def test_recovered_source_preparation_sends_no_admin_email(self) -> None:
+        """
+        Checks a source outage that clears on retry completes the queued work without email.
+        """
+        with tempfile.TemporaryDirectory() as directory, override_settings(SPOOL_ROOT_PATH=Path(directory)):
+            spool.write_event(Path(directory), 'full_reindex')
+            with patch(
+                'usep_indexer_app.lib.spool.reindex.process_full_reindex',
+                side_effect=[RuntimeError('Git unavailable'), None],
+            ):
+                with self.assertRaisesRegex(CommandError, 'Git unavailable'):
+                    call_command('process_spool')
+                call_command('process_spool', stdout=io.StringIO())
+            self.assertEqual([], vars(mail)['outbox'])
+            self.assertEqual(1, len(list((Path(directory) / 'completed').glob('*.json'))))
+
+    @override_settings(ADMINS=[('Test Admin', 'admin@example.org')])
+    def test_admin_delivery_error_keeps_the_original_technical_failure(self) -> None:
+        """
+        Checks failed administrator mail delivery does not replace the original command error.
+        """
+        result = spool.ProcessResult(status='failed', claimed=1, failed=1, technical_failure=True, error='Solr down')
+        with (
+            patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', return_value=result),
+            patch('usep_indexer_app.management.commands.process_spool.mail_admins', side_effect=RuntimeError('mail down')),
+            self.assertLogs('usep_indexer_app.management.commands.process_spool', level='ERROR'),
+            self.assertRaisesRegex(CommandError, 'Solr down'),
+        ):
+            call_command('process_spool')
 
     def build_test_event(
         self,

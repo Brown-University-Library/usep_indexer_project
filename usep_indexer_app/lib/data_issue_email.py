@@ -20,7 +20,6 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.mail import EmailMessage
 from django.core.validators import validate_email
 
-
 log = logging.getLogger(__name__)
 DATA_REPOSITORY_URL = 'https://github.com/Brown-University-Library/usep-data'
 ISSUE_DESCRIPTIONS = {
@@ -28,9 +27,11 @@ ISSUE_DESCRIPTIONS = {
     'xml_transform': ('XML transformation failed', 'Review the inscription and the indexing stylesheets together.'),
     'id_mismatch': (
         'XML ID and filename differ',
-        'The filename without .xml must match the ID produced by the indexing stylesheet. '
-        'The standard stylesheet reads the xml:id attribute on publicationStmt/idno. '
-        'Compare the quoted values below; spaces and escaped characters are significant.',
+        (
+            'The filename without .xml must match the ID produced by the indexing stylesheet. '
+            'The standard stylesheet reads the xml:id attribute on publicationStmt/idno. '
+            'Compare the quoted values below; spaces and escaped characters are significant.'
+        ),
     ),
     'id_missing': ('Missing or repeated document ID', 'The search document must contain exactly one nonempty ID.'),
     'date_range': ('Date range ends before it begins', 'Check the notBefore and notAfter years.'),
@@ -123,7 +124,6 @@ def start_indexing(data_revision: str, selected_count: int) -> None:
     if report is not None:
         report.data_revision = data_revision if re.fullmatch(r'[0-9a-fA-F]{7,40}', data_revision) else 'unavailable'
         report.selected_count += selected_count
-    return
 
 
 def source_path_for_filename(filename: str) -> str | None:
@@ -165,7 +165,6 @@ def record_failure(filename: str, category: str | None, *, document_id: str | No
                     document_id=document_id if category == 'id_mismatch' else None,
                 )
             )
-    return
 
 
 def record_accepted(count: int) -> None:
@@ -177,7 +176,6 @@ def record_accepted(count: int) -> None:
     report = _active_report.get()
     if report is not None:
         report.accepted_count += count
-    return
 
 
 def finish_indexing() -> None:
@@ -189,7 +187,6 @@ def finish_indexing() -> None:
     report = _active_report.get()
     if report is not None:
         report.indexing_finished = True
-    return
 
 
 def build_message(report: RunReport) -> str:
@@ -208,12 +205,13 @@ def build_message(report: RunReport) -> str:
         f'Inscriptions with recorded failures: {report.failed_count}',
         f'Inscriptions listed for data review: {len(report.issues)}',
         '',
-        'Retries report the same unresolved problems again. This email does not mean new problems were introduced.',
+        'At least one queued event reached its attempt limit. This report covers the combined processing run.',
+        'New commits or separately queued runs may report the same unresolved problems again.',
     ]
     if not report.indexing_finished:
         lines.append('Processing stopped early. These counts and findings cover only the work completed so far.')
     if report.failed_count > len(report.issues):
-        lines.append('Other failures require technical review and are included only in the administrator report.')
+        lines.append('Other failures require technical review; details are recorded in the application logs.')
     lines.extend(
         [
             '',
@@ -268,4 +266,3 @@ def email_report(report: RunReport) -> None:
             message.send(fail_silently=False)
         except Exception:
             log.exception('Unable to email the USEP data team about inscription problems.')
-    return

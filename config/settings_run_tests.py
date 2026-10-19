@@ -4,7 +4,6 @@ Database-free Django settings for the test suite.
 
 import pathlib
 
-
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 SECRET_KEY = 'test-only-secret-key'
 DEBUG = False
@@ -83,7 +82,7 @@ SOLR_COMMIT_WITHIN_MS = 500
 SOLR_TIMEOUT_SECONDS = 30.0
 LEGIT_IPS = ['127.0.0.1']
 SPOOL_ROOT_PATH = pathlib.Path('/tmp/usep-indexer-spool-tests')
-SPOOL_MAX_ATTEMPTS = 3
+SPOOL_MAX_ATTEMPTS = 2
 SPOOL_BATCH_SIZE = 100
 SPOOL_COMPLETED_RETENTION_DAYS = 30
 SPOOL_HEALTH_MAX_AGE_SECONDS = 300

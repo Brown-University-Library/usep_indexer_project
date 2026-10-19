@@ -20,8 +20,7 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 
-from usep_indexer_app.lib import processor, reindex
-
+from usep_indexer_app.lib import indexer, processor, reindex
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +79,7 @@ class ProcessResult:
     quarantined: int = 0
     cleaned: int = 0
     error: str | None = None
+    technical_failure: bool = False
 
 
 def utc_now() -> datetime.datetime:
@@ -101,7 +101,6 @@ def ensure_spool_directories(spool_root: Path) -> None:
     spool_root.mkdir(parents=True, exist_ok=True)
     for directory_name in LIFECYCLE_DIRECTORIES:
         (spool_root / directory_name).mkdir(exist_ok=True)
-    return
 
 
 @contextlib.contextmanager
@@ -215,7 +214,6 @@ def write_json_atomic(document: dict[str, object], destination_path: Path) -> No
         sync_directory(destination_path.parent)
     finally:
         temporary_path.unlink(missing_ok=True)
-    return
 
 
 def sync_directory(directory_path: Path) -> None:
@@ -229,7 +227,6 @@ def sync_directory(directory_path: Path) -> None:
         os.fsync(directory_descriptor)
     finally:
         os.close(directory_descriptor)
-    return
 
 
 def validate_event_document(document: object, event_path: Path) -> SpoolEvent:
@@ -419,7 +416,6 @@ def process_valid_events(events: list[SpoolEvent]) -> None:
     else:
         processor.process_incremental(files_updated, files_removed)
     log.info(f'Filesystem-queue batch processing completed; event_count, ``{len(events)}``; workflow, ``{workflow}``')
-    return
 
 
 def record_event_failure(event: SpoolEvent, spool_root: Path, max_attempts: int, error: Exception) -> str:
@@ -487,7 +483,6 @@ def write_processor_status(spool_root: Path, status_document: dict[str, object])
     Called by: process_spool()
     """
     write_json_atomic(status_document, spool_root / 'processor-status.json')
-    return
 
 
 def process_locked_spool(
@@ -540,6 +535,9 @@ def process_locked_spool(
         quarantined=quarantined_count,
         cleaned=cleaned_count,
         error=error_summary,
+        technical_failure=processing_error is not None and not isinstance(
+            processing_error, indexer.InscriptionProcessingError
+        ),
     )
     return result
 
@@ -579,6 +577,7 @@ def process_spool(spool_root: Path, batch_size: int, max_attempts: int, retentio
                 result = ProcessResult(
                     status='failed',
                     error=f'{type(error).__name__}: {error}'[:MAX_ERROR_LENGTH],
+                    technical_failure=True,
                 )
             finished_at = utc_now()
             write_processor_status(

@@ -37,7 +37,7 @@ class DataIssueEmailTests(SimpleTestCase):
             WEBSERVED_DATA_DIR_PATH=self.root / 'public',
             USEP_DATA_GIT_CLONED_DIR_PATH=self.clone,
             SPOOL_ROOT_PATH=self.spool_root,
-            SPOOL_MAX_ATTEMPTS=3,
+            SPOOL_MAX_ATTEMPTS=1,
             ADMINS=[('Administrator', 'admin@example.org')],
             USEP_DATA_TEAM_EMAILS=['editor@example.org', 'reviewer@example.org'],
             USEP_DATA_TEAM_EMAIL_LABEL='Development',
@@ -106,29 +106,77 @@ class DataIssueEmailTests(SimpleTestCase):
             self.assertIn(f'/blob/abc1234/xml_inscriptions/transcribed/broken-{number:03}.xml', message.body)
         self.assertNotIn(str(self.root), message.body)
         self.assertNotIn('Traceback', message.body)
-        pending = json.loads(next((self.spool_root / 'pending').glob('*.json')).read_text())
-        self.assertEqual(1, pending['attempts'])
-        self.assertEqual(spool.MAX_ERROR_LENGTH, len(pending['last_error']))
+        failed = json.loads(next((self.spool_root / 'failed').glob('*.json')).read_text())
+        self.assertEqual(1, failed['attempts'])
+        self.assertEqual(spool.MAX_ERROR_LENGTH, len(failed['last_error']))
         self.assertGreater(len(message.body), spool.MAX_ERROR_LENGTH)
         outbox: list[mail.EmailMessage] = vars(mail)['outbox']
-        self.assertEqual(2, len(outbox))
+        self.assertEqual(1, len(outbox))
 
-    def test_retry_sends_a_fresh_report_and_success_does_not_repeat_it(self) -> None:
+    @override_settings(SPOOL_MAX_ATTEMPTS=2)
+    def test_retry_sends_one_report_only_after_the_final_failure(self) -> None:
         """
-        Checks repeated failures send once per attempt and a later successful run stays quiet.
+        Checks the initial failure is silent and the final failure sends one report without an admin email.
         """
         path = self.add_inscription('metadata.xml', b'<TEI>')
         spool.write_event(self.spool_root, 'incremental', files_updated=[path])
         self.run_processor()
+        self.assertEqual([], vars(mail)['outbox'])
+        pending = json.loads(next((self.spool_root / 'pending').glob('*.json')).read_text())
+        self.assertEqual(1, pending['attempts'])
         self.run_processor()
-        self.assertEqual(2, len(self.team_messages()))
-        for message in self.team_messages():
-            self.assertIn('Inscriptions with recorded failures: 1', message.body)
+        self.assertEqual(1, len(self.team_messages()))
+        self.assertEqual(1, len(vars(mail)['outbox']))
+        self.assertIn('reached its attempt limit', self.team_messages()[0].body)
+        failed = json.loads(next((self.spool_root / 'failed').glob('*.json')).read_text())
+        self.assertEqual(2, failed['attempts'])
+        self.run_processor(fails=False)
+        self.assertEqual(1, len(vars(mail)['outbox']))
+
+    @override_settings(SPOOL_MAX_ATTEMPTS=2)
+    def test_successful_retry_sends_no_email(self) -> None:
+        """
+        Checks a corrected inscription completes on retry without notifying either audience.
+        """
+        path = self.add_inscription('metadata.xml', b'<TEI>')
+        spool.write_event(self.spool_root, 'incremental', files_updated=[path])
+        self.run_processor()
         self.add_inscription('metadata.xml', (FIXTURE_PATH / 'metadata.xml').read_bytes())
         self.run_processor(fails=False)
         self.run_processor(fails=False)
-        self.assertEqual(2, len(self.team_messages()))
+        self.assertEqual([], vars(mail)['outbox'])
         self.assertEqual(1, len(list((self.spool_root / 'completed').glob('*.json'))))
+
+    @override_settings(SPOOL_MAX_ATTEMPTS=3)
+    def test_explicit_attempt_limit_and_new_events_are_respected(self) -> None:
+        """
+        Checks an explicit limit overrides two attempts and a new event can receive a later report.
+        """
+        path = self.add_inscription('broken.xml', b'<TEI>')
+        for expected_reports in (1, 2):
+            spool.write_event(self.spool_root, 'incremental', files_updated=[path])
+            self.run_processor()
+            self.run_processor()
+            self.assertEqual(expected_reports - 1, len(vars(mail)['outbox']))
+            self.run_processor()
+            self.assertEqual(expected_reports, len(vars(mail)['outbox']))
+
+    @override_settings(SPOOL_MAX_ATTEMPTS=2)
+    def test_exhausted_event_is_reported_when_new_work_is_also_queued(self) -> None:
+        """
+        Checks a final failure is reported even when another event in the batch still has a retry.
+        """
+        broken_path = self.add_inscription('broken.xml', b'<TEI>')
+        spool.write_event(self.spool_root, 'incremental', files_updated=[broken_path])
+        self.run_processor()
+        good_path = self.add_inscription('metadata.xml', (FIXTURE_PATH / 'metadata.xml').read_bytes())
+        spool.write_event(self.spool_root, 'incremental', files_updated=[good_path])
+        self.run_processor()
+        self.assertEqual(1, len(vars(mail)['outbox']))
+        self.assertEqual(1, len(list((self.spool_root / 'failed').glob('*.json'))))
+        self.assertEqual(1, len(list((self.spool_root / 'pending').glob('*.json'))))
+        self.run_processor(fails=False)
+        self.assertEqual(1, len(vars(mail)['outbox']))
 
     def test_mismatched_id_preserves_whitespace_without_adding_email_lines(self) -> None:
         """
@@ -177,7 +225,7 @@ class DataIssueEmailTests(SimpleTestCase):
 
     def test_multiple_images_do_not_hide_unrelated_inscription_failures(self) -> None:
         """
-        Checks an ID mismatch still triggers the editor email and retry for a multiple-image inscription.
+        Checks an ID mismatch still triggers the editor email at the limit for a multiple-image inscription.
         """
         path = self.add_inscription('wrong-id.xml', (FIXTURE_PATH / 'multiple-images.xml').read_bytes())
         spool.write_event(self.spool_root, 'incremental', files_updated=[path])
@@ -185,12 +233,12 @@ class DataIssueEmailTests(SimpleTestCase):
         body = self.team_messages()[0].body
         self.assertIn('XML ID and filename differ (1)', body)
         self.assertNotIn('More than one image value', body)
-        self.assertEqual(1, len(list((self.spool_root / 'pending').glob('*.json'))))
+        self.assertEqual(1, len(list((self.spool_root / 'failed').glob('*.json'))))
         self.handler.assert_not_called()
 
-    def test_disabled_recipients_leave_admin_email_and_retry_unchanged(self) -> None:
+    def test_disabled_recipients_send_no_email_to_admins_or_cc(self) -> None:
         """
-        Checks an empty recipient list disables only the data-team notification.
+        Checks ordinary data findings send no email with an empty primary list, even at the attempt limit.
         """
         path = self.add_inscription('broken.xml', b'<TEI>')
         spool.write_event(self.spool_root, 'incremental', files_updated=[path])
@@ -198,12 +246,11 @@ class DataIssueEmailTests(SimpleTestCase):
             self.run_processor()
         self.assertEqual([], self.team_messages())
         outbox: list[mail.EmailMessage] = vars(mail)['outbox']
-        self.assertEqual(1, len(outbox))
-        self.assertEqual(['admin@example.org'], outbox[0].to)
+        self.assertEqual([], outbox)
 
-    def test_team_delivery_failure_keeps_admin_email_and_original_error(self) -> None:
+    def test_team_delivery_failure_keeps_original_error_without_another_email(self) -> None:
         """
-        Checks a failed team email does not replace the indexing error or prevent retry handling.
+        Checks a failed email leaves the indexing failure recorded without sending a fallback email.
         """
         path = self.add_inscription('broken.xml', b'<TEI>')
         spool.write_event(self.spool_root, 'incremental', files_updated=[path])
@@ -216,13 +263,14 @@ class DataIssueEmailTests(SimpleTestCase):
             self.run_processor()
         self.assertIn('Unable to email the USEP data team', '\n'.join(captured.output))
         outbox: list[mail.EmailMessage] = vars(mail)['outbox']
-        self.assertEqual(1, len(outbox))
-        self.assertIn('InscriptionProcessingError', outbox[0].body)
-        self.assertEqual(1, len(list((self.spool_root / 'pending').glob('*.json'))))
+        self.assertEqual([], outbox)
+        failed_message.send.assert_called_once_with(fail_silently=False)
+        failed = json.loads(next((self.spool_root / 'failed').glob('*.json')).read_text())
+        self.assertIn('InscriptionProcessingError', failed['last_error'])
 
     def test_infrastructure_and_unknown_failures_are_only_sent_to_admins(self) -> None:
         """
-        Checks outages, unknown Solr fields, and unexpected code errors do not reach editors.
+        Checks outages, unknown Solr fields, and unexpected code errors reach only administrators at the limit.
         """
         for error in (RuntimeError('private server details'), OSError('private filesystem details')):
             with (
@@ -233,12 +281,34 @@ class DataIssueEmailTests(SimpleTestCase):
                 spool.write_event(self.spool_root, 'incremental', files_updated=[path])
                 self.run_processor()
         self.assertEqual([], self.team_messages())
+
         for status in (400, 503):
             with self.subTest(status=status):
                 self.handler.return_value = httpx.Response(status, text='unknown field; private server details')
                 spool.write_event(self.spool_root, 'incremental', files_updated=[path])
                 self.run_processor()
         self.assertEqual([], self.team_messages())
+        outbox: list[mail.EmailMessage] = vars(mail)['outbox']
+        self.assertEqual(4, len(outbox))
+        self.assertTrue(all(message.to == ['admin@example.org'] for message in outbox))
+
+    @override_settings(SPOOL_MAX_ATTEMPTS=2)
+    def test_solr_outage_sends_only_one_admin_email_after_the_final_attempt(self) -> None:
+        """
+        Checks an unavailable Solr server retries silently before sending one technical-failure email.
+        """
+        path = self.add_inscription('metadata.xml', (FIXTURE_PATH / 'metadata.xml').read_bytes())
+        self.handler.return_value = httpx.Response(503, text='service unavailable')
+        spool.write_event(self.spool_root, 'incremental', files_updated=[path])
+        self.run_processor()
+        self.assertEqual([], vars(mail)['outbox'])
+        self.run_processor()
+        outbox: list[mail.EmailMessage] = vars(mail)['outbox']
+        self.assertEqual(1, len(outbox))
+        self.assertEqual(['admin@example.org'], outbox[0].to)
+        self.assertIn('HTTPStatusError', outbox[0].body)
+        self.run_processor(fails=False)
+        self.assertEqual(1, len(outbox))
 
     def test_data_errors_are_reported_even_if_solr_later_becomes_unavailable(self) -> None:
         """
@@ -256,6 +326,31 @@ class DataIssueEmailTests(SimpleTestCase):
         self.assertIn('Inscriptions successfully accepted by Solr: 0', message.body)
         self.assertIn('XML could not be read (1)', message.body)
         self.assertNotIn('private server details', message.body)
+        outbox: list[mail.EmailMessage] = vars(mail)['outbox']
+        admin_messages = [item for item in outbox if item.to == ['admin@example.org']]
+        self.assertEqual(2, len(outbox))
+        self.assertEqual(1, len(admin_messages))
+        self.assertIn('HTTPStatusError', admin_messages[0].body)
+
+    def test_mixed_document_failures_keep_technical_details_in_admin_email(self) -> None:
+        """
+        Checks unknown document errors reach admins while recognized XML errors remain in the team report.
+        """
+        paths = [self.add_inscription('broken.xml', b'<TEI>'), self.add_inscription('unknown.xml', b'<TEI>')]
+        with patch.object(
+            indexer,
+            'build_complete_document',
+            side_effect=[UnicodeError('invalid XML encoding'), RuntimeError('private technical detail')],
+        ):
+            spool.write_event(self.spool_root, 'incremental', files_updated=paths)
+            self.run_processor()
+        message = self.team_messages()[0]
+        self.assertIn('Other failures require technical review', message.body)
+        self.assertNotIn('private technical detail', message.body)
+        outbox: list[mail.EmailMessage] = vars(mail)['outbox']
+        admin_messages = [item for item in outbox if item.to == ['admin@example.org']]
+        self.assertEqual(2, len(outbox))
+        self.assertIn('private technical detail', admin_messages[0].body)
 
     def test_full_reindex_reports_batch_successes_and_individual_rejections(self) -> None:
         """

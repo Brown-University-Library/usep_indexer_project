@@ -7,8 +7,8 @@ import os
 import pathlib
 
 from dotenv import find_dotenv, load_dotenv
-from usep_indexer_app.lib.data_issue_email import parse_recipients
 
+from usep_indexer_app.lib.data_issue_email import parse_recipients
 
 dotenv_path = pathlib.Path(__file__).resolve().parent.parent.parent / '.env'
 assert dotenv_path.exists(), f'file does not exist, ``{dotenv_path}``'
@@ -91,7 +91,7 @@ SOLR_COMMIT_WITHIN_MS = int(os.environ.get('SOLR_COMMIT_WITHIN_MS', '500'))
 SOLR_TIMEOUT_SECONDS = float(os.environ.get('SOLR_TIMEOUT_SECONDS', '30'))
 LEGIT_IPS = json.loads(os.environ['LEGIT_IPS_JSON'])
 SPOOL_ROOT_PATH = pathlib.Path(os.environ['SPOOL_ROOT_PATH'])
-SPOOL_MAX_ATTEMPTS = int(os.environ.get('SPOOL_MAX_ATTEMPTS', '3'))
+SPOOL_MAX_ATTEMPTS = int(os.environ.get('SPOOL_MAX_ATTEMPTS', '2'))
 SPOOL_BATCH_SIZE = int(os.environ.get('SPOOL_BATCH_SIZE', '100'))
 SPOOL_COMPLETED_RETENTION_DAYS = int(os.environ.get('SPOOL_COMPLETED_RETENTION_DAYS', '30'))
 SPOOL_HEALTH_MAX_AGE_SECONDS = int(os.environ.get('SPOOL_HEALTH_MAX_AGE_SECONDS', '300'))
