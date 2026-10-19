@@ -38,12 +38,19 @@ class BasicAuthProtectedView:
 
         Called by: Django request dispatch
         """
-        credentials = parse_basic_auth(request.headers.get('Authorization', ''))
+        authorization_header: str = request.headers.get('Authorization', '')
+        authorization_header_present: bool = 'Authorization' in request.headers
+        basic_scheme: bool = authorization_header.partition(' ')[0].lower() == 'basic'
+        credentials: tuple[str, str] | None = parse_basic_auth(authorization_header)
+        credentials_parsed: bool = credentials is not None
+        credential_source: str = 'REMOTE_ADMIN_AUTH' if self.remote_admin else 'BASIC_AUTH_USERNAME/BASIC_AUTH_PASSWORD'
         is_authorized = credentials is not None and credentials_match(*credentials, remote_admin=self.remote_admin)
         authorization_result = 'accepted' if is_authorized else 'rejected'
         log.info(
             f'authorization_result, ``{authorization_result}``; request_method, ``{request.method}``; '
-            f'request_path, ``{request.path}``'
+            f'request_path, ``{request.path}``; credential_source, ``{credential_source}``; '
+            f'authorization_header_present, ``{authorization_header_present}``; basic_scheme, ``{basic_scheme}``; '
+            f'credentials_parsed, ``{credentials_parsed}``'
         )
         if is_authorized:
             response = self.view_function(request, *args, **kwargs)
@@ -132,4 +139,10 @@ def credentials_match(username: str, password: str, *, remote_admin: bool = Fals
         expected_password = settings.BASIC_AUTH_PASSWORD
     username_matches = secrets.compare_digest(username.encode('utf-8'), expected_username.encode('utf-8'))
     password_matches = secrets.compare_digest(password.encode('utf-8'), expected_password.encode('utf-8'))
+    log.info(
+        f'remote_admin, ``{remote_admin}``; received_username_length, ``{len(username)}``; '
+        f'expected_username_length, ``{len(expected_username)}``; received_password_length, ``{len(password)}``; '
+        f'expected_password_length, ``{len(expected_password)}``; username_matches, ``{username_matches}``; '
+        f'password_matches, ``{password_matches}``'
+    )
     return username_matches and password_matches

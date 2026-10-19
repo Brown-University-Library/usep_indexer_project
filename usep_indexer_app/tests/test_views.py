@@ -73,10 +73,61 @@ class ViewTests(SimpleTestCase):
         with patch('usep_indexer_app.views.spool.write_event') as write_event:
             for url in ('/', '/force/'):
                 with self.subTest(url=url):
-                    response = self.client.post(url, data='{}', content_type='application/json', headers=self.admin_auth_header)
+                    response = self.client.post(
+                        url, data='{}', content_type='application/json', headers=self.admin_auth_header
+                    )
                     self.assertEqual(401, response.status_code)
                     self.assertEqual('Basic realm="Login Required"', response['WWW-Authenticate'])
             write_event.assert_not_called()
+
+    def test_admin_auth_logs_diagnostics_without_credentials(self) -> None:
+        """
+        Checks absent, malformed, mismatched, and accepted credentials log only safe diagnostic fields.
+        """
+        username = 'u' * 30
+        password = 'p' * 64
+        cases: tuple[tuple[str, int | None, int | None, bool, bool, bool], ...] = (
+            ('', None, None, False, False, False),
+            ('Bearer private-token', None, None, True, False, False),
+            ('Basic invalid-base64', None, None, True, True, False),
+            ('Basic ' + base64.b64encode(b'no-colon').decode('ascii'), None, None, True, True, False),
+            ('Basic ' + base64.b64encode(f'{"x" * 21}:{"y" * 21}'.encode()).decode(), 21, 21, True, True, False),
+            ('Basic ' + base64.b64encode(f'{username}:{"y" * 21}'.encode()).decode(), 30, 21, True, True, False),
+            ('Basic ' + base64.b64encode(f'{"x" * 21}:{password}'.encode()).decode(), 21, 64, True, True, False),
+            ('Basic ' + base64.b64encode(f'{username}:{password}'.encode()).decode(), 30, 64, True, True, True),
+        )
+        with (
+            override_settings(REMOTE_ADMIN_AUTH={'username': username, 'password': password}),
+            patch('usep_indexer_app.views.spool.write_event') as write_event,
+        ):
+            for case_number, (header, user_length, password_length, present, basic, accepted) in enumerate(cases):
+                with self.subTest(case_number=case_number), self.assertLogs('usep_indexer_app.lib.auth', 'INFO') as logs:
+                    headers = {'Authorization': header} if present else {}
+                    response = self.client.get('/reindex_all/', headers=headers)
+                output = '\n'.join(logs.output)
+                self.assertEqual(200 if accepted else 401, response.status_code)
+                self.assertIn('request_method, ``GET``; request_path, ``/reindex_all/``', output)
+                self.assertIn('credential_source, ``REMOTE_ADMIN_AUTH``', output)
+                self.assertIn(f'authorization_header_present, ``{present}``', output)
+                self.assertIn(f'basic_scheme, ``{basic}``', output)
+                self.assertIn(f'credentials_parsed, ``{user_length is not None}``', output)
+                self.assertIn(f'authorization_result, ``{"accepted" if accepted else "rejected"}``', output)
+                if user_length is not None:
+                    self.assertIn(f'received_username_length, ``{user_length}``', output)
+                    self.assertIn(f'received_password_length, ``{password_length}``', output)
+                    self.assertIn('expected_username_length, ``30``', output)
+                    self.assertIn('expected_password_length, ``64``', output)
+                    self.assertIn(f'username_matches, ``{user_length == 30}``', output)
+                    self.assertIn(f'password_matches, ``{password_length == 64}``', output)
+                else:
+                    self.assertNotIn('received_username_length', output)
+                    self.assertNotIn('username_matches', output)
+                for secret in (username, password, 'x' * 21, 'y' * 21, 'private-token', 'invalid-base64', 'no-colon'):
+                    self.assertNotIn(secret, output)
+                if header:
+                    self.assertNotIn(header, output)
+                    self.assertNotIn(header.partition(' ')[2], output)
+            write_event.assert_called_once()
 
     @patch('usep_indexer_app.views.spool.write_event')
     def test_webhook_parses_all_commits_and_writes_event(self, mock_write_event) -> None:
