@@ -239,7 +239,7 @@ def validate_event_document(document: object, event_path: Path) -> SpoolEvent:
     Called by: build_event_document(), load_event()
     """
     if not isinstance(document, dict):
-        raise ValueError('Event document must be a JSON object.')
+        raise TypeError('Event document must be a JSON object.')
     if set(document) != EVENT_KEYS:
         raise ValueError('Event document fields do not match the spool schema.')
 
@@ -257,7 +257,7 @@ def validate_event_document(document: object, event_path: Path) -> SpoolEvent:
     if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != SCHEMA_VERSION:
         raise ValueError(f'Unsupported spool schema version: {schema_version}')
     if not isinstance(event_id, str):
-        raise ValueError('Event ID must be a string UUID.')
+        raise TypeError('Event ID must be a string UUID.')
     uuid.UUID(event_id)
     if not isinstance(event_type, str) or event_type not in EVENT_TYPES:
         raise ValueError(f'Unsupported event type: {event_type}')
@@ -300,7 +300,7 @@ def require_timestamp(value: object, field_name: str) -> str:
     Called by: validate_event_document()
     """
     if not isinstance(value, str):
-        raise ValueError(f'{field_name} must be a timestamp string.')
+        raise TypeError(f'{field_name} must be a timestamp string.')
     parsed_timestamp = datetime.datetime.fromisoformat(value)
     if parsed_timestamp.utcoffset() is None:
         raise ValueError(f'{field_name} must include a timezone offset.')
@@ -374,7 +374,7 @@ def validate_claimed_events(claimed_paths: list[Path], spool_root: Path) -> tupl
     for event_path in claimed_paths:
         try:
             valid_events.append(load_event(event_path))
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError, OSError):
             log.exception('Quarantining invalid spool event %s.', event_path)
             move_event(event_path, spool_root / 'quarantine')
             quarantined_count += 1
@@ -656,7 +656,7 @@ def get_processor_health(
         try:
             status_document = json.loads(status_path.read_text(encoding='utf-8'))
             if not isinstance(status_document, dict):
-                raise ValueError('Processor status must be a JSON object.')
+                raise TypeError('Processor status must be a JSON object.')
             processor_status = str(status_document.get('status', 'invalid'))
             started_at_value = status_document.get('started_at')
             finished_at_value = status_document.get('finished_at')

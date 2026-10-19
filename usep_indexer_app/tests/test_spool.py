@@ -99,7 +99,7 @@ class SpoolTests(SimpleTestCase):
     @patch('usep_indexer_app.lib.spool.processor.process_incremental')
     def test_invalid_event_is_quarantined_while_valid_event_processes(self, mock_process) -> None:
         """
-        Checks that one malformed event does not block a valid event batch.
+        Checks malformed JSON, unsupported versions, and wrong types do not block valid queued work.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             spool_root = Path(temporary_directory)
@@ -111,6 +111,14 @@ class SpoolTests(SimpleTestCase):
                 json.dumps(unsupported_document),
                 encoding='utf-8',
             )
+            (spool_root / 'pending' / 'non-object.json').write_text('[]', encoding='utf-8')
+            for field_name in ('event_id', 'received_at', 'last_attempt_at'):
+                wrong_type_document = spool.build_event_document('incremental')
+                wrong_type_document[field_name] = 123
+                (spool_root / 'pending' / f'wrong-type-{field_name}.json').write_text(
+                    json.dumps(wrong_type_document),
+                    encoding='utf-8',
+                )
 
             result = spool.process_spool(spool_root, batch_size=100, max_attempts=3, retention_days=30)
 
@@ -119,9 +127,9 @@ class SpoolTests(SimpleTestCase):
 
         self.assertEqual('success', result.status)
         self.assertEqual(1, result.processed)
-        self.assertEqual(2, result.quarantined)
+        self.assertEqual(6, result.quarantined)
         self.assertEqual(1, completed_count)
-        self.assertEqual(2, quarantine_count)
+        self.assertEqual(6, quarantine_count)
         mock_process.assert_called_once_with(['one.xml'], [])
 
     @patch('usep_indexer_app.lib.spool.reindex.process_full_reindex')
@@ -288,6 +296,20 @@ class SpoolTests(SimpleTestCase):
         self.assertEqual('processing_active', fresh_health['result'])
         self.assertEqual(1, fresh_health['pending_count'])
         self.assertEqual('processing_not_active', stale_health['result'])
+
+    def test_processor_health_handles_non_object_status(self) -> None:
+        """
+        Checks a status file with the wrong JSON type reports invalid health without raising.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            spool_root = Path(temporary_directory)
+            spool.ensure_spool_directories(spool_root)
+            (spool_root / 'processor-status.json').write_text('[]', encoding='utf-8')
+            with self.assertLogs('usep_indexer_app.lib.spool', level='ERROR'):
+                health = spool.get_processor_health(spool_root, 300)
+
+        self.assertEqual('invalid', health['processor_status'])
+        self.assertEqual('processing_not_active', health['result'])
 
     def test_management_command_processes_configured_spool(self) -> None:
         """
