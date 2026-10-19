@@ -4,6 +4,7 @@ import pathlib
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
+
 from usep_indexer_app.lib import orphans
 
 
@@ -17,7 +18,9 @@ class ViewTests(SimpleTestCase):
         Checks use of a reusable valid Basic Auth header.
         """
         credentials = base64.b64encode(b'test-user:test-password').decode('ascii')
-        self.auth_header = {'HTTP_AUTHORIZATION': f'Basic {credentials}'}
+        self.auth_header = {'Authorization': f'Basic {credentials}'}
+        admin_credentials = base64.b64encode(b'test-admin:test-admin-password').decode('ascii')
+        self.admin_auth_header = {'Authorization': f'Basic {admin_credentials}'}
         processor_lock_patcher = patch('usep_indexer_app.views.spool.processor_lock')
         self.mock_processor_lock = processor_lock_patcher.start()
         self.addCleanup(processor_lock_patcher.stop)
@@ -33,6 +36,47 @@ class ViewTests(SimpleTestCase):
         self.assertEqual(401, response.status_code)
         self.assertEqual('Basic realm="Login Required"', response['WWW-Authenticate'])
         self.assertIn('authorization_result, ``rejected``', captured_logs.output[0])
+
+    def test_admin_endpoints_require_admin_credentials_before_doing_work(self) -> None:
+        """
+        Checks all admin operations reject missing, incorrect, and listener credentials without doing work.
+        """
+        wrong_credentials = base64.b64encode(b'test-admin:wrong-password').decode('ascii')
+        wrong_username = base64.b64encode(b'wrong-admin:test-admin-password').decode('ascii')
+        headers = (
+            {},
+            self.auth_header,
+            {'Authorization': f'Basic {wrong_credentials}'},
+            {'Authorization': f'Basic {wrong_username}'},
+            {'Authorization': 'Basic invalid-base64'},
+        )
+        with (
+            patch('usep_indexer_app.views.spool.write_event') as write_event,
+            patch('usep_indexer_app.views.orphans.prepare_orphan_review') as prepare_review,
+            patch('usep_indexer_app.views.orphans.run_deletes') as run_deletes,
+        ):
+            for url in ('/reindex_all/', '/list_orphans/', '/orphan_handler/?action_button=Yes'):
+                for header_number, header in enumerate(headers):
+                    with self.subTest(url=url, header_number=header_number):
+                        response = self.client.get(url, headers=header)
+                        self.assertEqual(401, response.status_code)
+                        self.assertEqual('Basic realm="USEP Remote Admin"', response['WWW-Authenticate'])
+            write_event.assert_not_called()
+            prepare_review.assert_not_called()
+            run_deletes.assert_not_called()
+            self.mock_processor_lock.assert_not_called()
+
+    def test_listener_endpoints_reject_admin_credentials(self) -> None:
+        """
+        Checks remote-admin credentials do not authorize either listener endpoint.
+        """
+        with patch('usep_indexer_app.views.spool.write_event') as write_event:
+            for url in ('/', '/force/'):
+                with self.subTest(url=url):
+                    response = self.client.post(url, data='{}', content_type='application/json', headers=self.admin_auth_header)
+                    self.assertEqual(401, response.status_code)
+                    self.assertEqual('Basic realm="Login Required"', response['WWW-Authenticate'])
+            write_event.assert_not_called()
 
     @patch('usep_indexer_app.views.spool.write_event')
     def test_webhook_parses_all_commits_and_writes_event(self, mock_write_event) -> None:
@@ -59,7 +103,7 @@ class ViewTests(SimpleTestCase):
                 data=json.dumps(payload),
                 content_type='application/json',
                 HTTP_X_GITHUB_DELIVERY='delivery-123',
-                **self.auth_header,
+                headers=self.auth_header,
             )
 
         self.assertEqual(200, response.status_code)
@@ -88,7 +132,7 @@ class ViewTests(SimpleTestCase):
         """
         Checks that a root GET without a request body does not trigger work.
         """
-        response = self.client.get('/', **self.auth_header)
+        response = self.client.get('/', headers=self.auth_header)
         self.assertEqual(200, response.status_code)
         self.assertEqual(b'received', response.content)
         mock_write_event.assert_not_called()
@@ -98,7 +142,7 @@ class ViewTests(SimpleTestCase):
         """
         Checks that a force GET without a request body queues empty file lists.
         """
-        response = self.client.get('/force/', **self.auth_header)
+        response = self.client.get('/force/', headers=self.auth_header)
         self.assertEqual(200, response.status_code)
         self.assertEqual([], mock_write_event.call_args.kwargs['files_updated'])
         self.assertEqual([], mock_write_event.call_args.kwargs['files_removed'])
@@ -108,7 +152,7 @@ class ViewTests(SimpleTestCase):
         """
         Checks that the admin reindex endpoint queues a full-workflow event.
         """
-        response = self.client.get('/reindex_all/', **self.auth_header)
+        response = self.client.get('/reindex_all/', headers=self.admin_auth_header)
         self.assertEqual(200, response.status_code)
         mock_write_event.assert_called_once()
         self.assertEqual('full_reindex', mock_write_event.call_args.args[1])
@@ -118,7 +162,7 @@ class ViewTests(SimpleTestCase):
         """
         Checks that a failed full-reindex write is not acknowledged as accepted.
         """
-        response = self.client.get('/reindex_all/', **self.auth_header)
+        response = self.client.get('/reindex_all/', headers=self.admin_auth_header)
         self.assertEqual(503, response.status_code)
         mock_write_event.assert_called_once()
 
@@ -127,7 +171,7 @@ class ViewTests(SimpleTestCase):
         """
         Checks that a failed durable write is not acknowledged as accepted.
         """
-        response = self.client.post('/', data='{}', content_type='application/json', **self.auth_header)
+        response = self.client.post('/', data='{}', content_type='application/json', headers=self.auth_header)
         self.assertEqual(503, response.status_code)
         mock_write_event.assert_called_once()
 
@@ -139,7 +183,7 @@ class ViewTests(SimpleTestCase):
         """
         Checks JSON output and database-free confirmation state.
         """
-        response = self.client.get('/list_orphans/?format=json', **self.auth_header)
+        response = self.client.get('/list_orphans/?format=json', headers=self.admin_auth_header)
         self.assertEqual(200, response.status_code)
         self.assertEqual(['orphan-1'], response.json()['data'])
         self.assertEqual('abc1234', response.json()['data_revision'])
@@ -160,14 +204,14 @@ class ViewTests(SimpleTestCase):
         """
         Checks that HTML and JSON responses do not disclose configured locations.
         """
-        json_response = self.client.get('/list_orphans/?format=json', **self.auth_header)
+        json_response = self.client.get('/list_orphans/?format=json', headers=self.admin_auth_header)
         json_data = json_response.json()
         self.assertNotIn('inscriptions_dir_path', json_data)
         self.assertNotIn('solr_url', json_data)
         self.assertEqual('abc1234', json_data['data_revision'])
         self.assertEqual('configured dev Solr index', json_data['solr_index_label'])
 
-        html_response = self.client.get('/list_orphans/', **self.auth_header)
+        html_response = self.client.get('/list_orphans/', headers=self.admin_auth_header)
         self.assertNotContains(html_response, '/private/deployment/usep-data')
         self.assertNotContains(html_response, 'dev-internal-solr.example.org')
         self.assertContains(html_response, 'configured dev Solr index')
@@ -185,7 +229,7 @@ class ViewTests(SimpleTestCase):
         session.save()
         self.mock_processor_lock.return_value.__enter__.return_value = False
 
-        response = self.client.get('/list_orphans/?format=json', **self.auth_header)
+        response = self.client.get('/list_orphans/?format=json', headers=self.admin_auth_header)
 
         self.assertEqual(409, response.status_code)
         self.assertEqual(
@@ -210,7 +254,7 @@ class ViewTests(SimpleTestCase):
         session.save()
 
         with self.assertLogs('usep_indexer_app.views', level='ERROR'):
-            response = self.client.get('/list_orphans/?format=json', **self.auth_header)
+            response = self.client.get('/list_orphans/?format=json', headers=self.admin_auth_header)
 
         self.assertEqual(503, response.status_code)
         self.assertEqual(
@@ -228,8 +272,8 @@ class ViewTests(SimpleTestCase):
         """
         review = orphans.OrphanReview(orphan_ids=['orphan-1'], data_revision='abc1234')
         with patch('usep_indexer_app.views.orphans.prepare_orphan_review', return_value=review):
-            self.client.get('/list_orphans/?format=json', **self.auth_header)
-        response = self.client.get('/orphan_handler/?action_button=Yes', **self.auth_header)
+            self.client.get('/list_orphans/?format=json', headers=self.admin_auth_header)
+        response = self.client.get('/orphan_handler/?action_button=Yes', headers=self.admin_auth_header)
         self.assertEqual(200, response.status_code)
         self.assertEqual(b'all orphans deleted', response.content)
         mock_run_deletes.assert_called_once_with(['orphan-1'])

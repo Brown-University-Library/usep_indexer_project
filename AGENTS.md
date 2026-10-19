@@ -26,7 +26,7 @@ If other instruction files exist (Copilot, IDE rules, contributor docs) and conf
     - `uv run ./run_tests.py`
         - Note that `run_tests.py` has usage instructions about how to run more granular tests.
 - Run django management scripts via: `uv run ./manage.py THE-COMMAND`
-- For local editor/type checking, run `uv sync --group local` and select the project's `.venv` interpreter. The local group includes `types-lxml`, which supplies type definitions for lxml's compiled `etree` module. Keep this group installed when syncing the development environment; do not rely on temporary external stubs to verify what Pylance sees.
+- For local editor/type checking, run `uv sync --group local` and select the project's `.venv` interpreter. The local group includes `types-lxml` for lxml's compiled `etree` module and `django-stubs` for Django's request, response, and test-client types. Keep this group installed when syncing the development environment; do not rely on temporary external stubs to verify what Pylance sees.
 
 
 ## Coding directives (Python)
@@ -197,7 +197,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 
 ### Request-to-index flows
 
-1. `POST /` or a forced `GET`/`POST /force/` passes HTTP Basic Auth, then `payloads.prepare_files_to_process()` collects added, modified, and removed paths across every commit in the JSON body.
+1. `POST /` or a forced `GET`/`POST /force/` passes HTTP Basic Auth using `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD`, then `payloads.prepare_files_to_process()` collects added, modified, and removed paths across every commit in the JSON body.
 2. `spool.write_event()` writes a strict schema-version-1 JSON document to `pending/` using a synchronized temporary file and atomic rename. `X-GitHub-Delivery` becomes `request_id`; when absent, the generated event UUID is used.
 3. `uv run ./manage.py process_spool` takes a non-blocking `flock`, recovers files left in `processing/`, claims a batch, quarantines malformed events, and coalesces valid events with newest-event-wins path state.
 4. Any full-reindex event in a claimed batch selects the full workflow for that entire batch. Otherwise, one incremental workflow handles the coalesced changed paths.
@@ -252,7 +252,7 @@ Use this section as a fast orientation map, not as a substitute for reading the 
 - Incremental paths are reduced to their basename when locating a flattened inscription and deriving the Solr ID. The three source directories therefore share one filename/ID namespace.
 - Malformed GitHub JSON is intentionally acknowledged and queued as an incremental event with empty path lists. An empty-body request to `/` queues nothing, while `/force/` queues even without a body.
 - The listener validates Basic Auth but does not validate a GitHub HMAC signature. Its security depends on strong credentials and deployment behind HTTPS. Preserve compatibility unless a task explicitly changes this contract.
-- `/reindex_all/`, `/list_orphans/`, and orphan deletion are state-changing GET flows retained for legacy compatibility. `/list_orphans/` pulls and republishes public data before review; orphan deletion relies on that response putting all candidate IDs into a signed browser cookie.
+- `/reindex_all/`, `/list_orphans/`, and `/orphan_handler/` use `remote_admin_auth_required` and the separate `REMOTE_ADMIN_AUTH` setting. Required `REMOTE_ADMIN_AUTH_JSON` supplies exactly two nonempty string fields, `username` and `password`; parsing rejects control characters and a colon in the username without including credential values in errors. These admin routes use a separate Basic Auth realm and do not fall back to listener credentials. They remain state-changing GET flows. `/list_orphans/` pulls and republishes public data before review; orphan deletion relies on that response putting all candidate IDs into a signed browser cookie.
 - `/processing_check/` compares `REMOTE_ADDR` directly with `LEGIT_IPS`; it is not proxy-header aware. `/info/`, `/version/`, and production `/error_check/` are public.
 - `/list_orphans/` deliberately omits configured filesystem and Solr locations from its HTML/JSON context. It exposes the public `usep-data` revision and a safe index label: Solr hostnames beginning with `d` display as dev, those beginning with `p` display as prod, and other hostnames use a neutral label. Preserve that information-disclosure boundary when changing the response context or template.
 - The main settings module asserts that `../.env` exists during import and loads it with `override=True`. JSON-suffixed values must be valid JSON, required email/log/cache values must exist even when not central to a command, and the log directory must already exist. Prefer absolute configured paths because unresolved relative paths depend on the process working directory. Use `config/example.env` for configuration shape, never a real outer `.env`.

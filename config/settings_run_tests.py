@@ -70,6 +70,7 @@ CACHES = {
 
 BASIC_AUTH_USERNAME = 'test-user'
 BASIC_AUTH_PASSWORD = 'test-password'
+REMOTE_ADMIN_AUTH = {'username': 'test-admin', 'password': 'test-admin-password'}
 USEP_DATA_GIT_CLONED_DIR_PATH = pathlib.Path('/tmp/usep-data-clone')
 TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH = pathlib.Path('/tmp/temp_unified_inscriptions_dir')
 WEBSERVED_DATA_DIR_PATH = pathlib.Path('/tmp/usep-webserved-data')

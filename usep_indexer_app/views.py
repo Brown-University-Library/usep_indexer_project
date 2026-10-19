@@ -10,7 +10,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
 from usep_indexer_app.lib import orphans, payloads, processing_check_helper, spool, version_helper
-from usep_indexer_app.lib.auth import basic_auth_required
+from usep_indexer_app.lib.auth import basic_auth_required, remote_admin_auth_required
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def info(request: HttpRequest) -> JsonResponse:
 
 
 @require_GET
-@basic_auth_required
+@remote_admin_auth_required
 def list_orphans(request: HttpRequest) -> HttpResponse:
     """
     Refreshes public data and lists Solr IDs without a matching inscription.
@@ -93,7 +93,7 @@ def list_orphans(request: HttpRequest) -> HttpResponse:
 
 
 @require_GET
-@basic_auth_required
+@remote_admin_auth_required
 def delete_orphans(request: HttpRequest) -> HttpResponse:
     """
     Deletes the orphan IDs saved by the preceding list-orphans request.
@@ -117,7 +117,7 @@ def delete_orphans(request: HttpRequest) -> HttpResponse:
 
 
 @require_GET
-@basic_auth_required
+@remote_admin_auth_required
 def reindex_all(request: HttpRequest) -> HttpResponse:
     """
     Saves a durable full pull, copy, and reindex request.
@@ -181,7 +181,7 @@ def error_check(request: HttpRequest) -> HttpResponse:
     """
     del request
     if project_settings.DEBUG is True:
-        raise Exception('Raising intentional exception to check email-admins-on-error functionality.')
+        raise RuntimeError('Raising intentional exception to check email-admins-on-error functionality.')
     return HttpResponseNotFound('<div>404 / Not Found</div>')
 
 

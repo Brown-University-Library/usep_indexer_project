@@ -8,6 +8,7 @@ import pathlib
 
 from dotenv import find_dotenv, load_dotenv
 
+from usep_indexer_app.lib.auth import parse_remote_admin_auth
 from usep_indexer_app.lib.data_issue_email import parse_recipients
 
 dotenv_path = pathlib.Path(__file__).resolve().parent.parent.parent / '.env'
@@ -79,6 +80,7 @@ CACHES = json.loads(os.environ['CACHES_JSON'])
 
 BASIC_AUTH_USERNAME = os.environ['BASIC_AUTH_USERNAME']
 BASIC_AUTH_PASSWORD = os.environ['BASIC_AUTH_PASSWORD']
+REMOTE_ADMIN_AUTH = parse_remote_admin_auth(os.environ.get('REMOTE_ADMIN_AUTH_JSON'))
 USEP_DATA_GIT_CLONED_DIR_PATH = pathlib.Path(os.environ['USEP_DATA_GIT_CLONED_DIR_PATH'])
 TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH = pathlib.Path(os.environ['TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH'])
 WEBSERVED_DATA_DIR_PATH = pathlib.Path(os.environ['WEBSERVED_DATA_DIR_PATH'])

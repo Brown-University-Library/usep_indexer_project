@@ -134,7 +134,7 @@ Before processing queued work:
 
 Update the outer `.env` using `config/example.env` as the checklist. In particular:
 
-- Replace the Django secret, Basic Auth credentials, hosts, trusted origins, and IP allowlist. For ordinary local HTTP development, keep `DEBUG_JSON="true"` and `SESSION_COOKIE_SECURE_JSON="false"`.
+- Replace the Django secret, Basic Auth credentials, hosts, trusted origins, and IP allowlist. `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` configure the listener. The required `REMOTE_ADMIN_AUTH_JSON` object supplies separate nonempty `username` and `password` strings for reindexing and orphan review/deletion. For ordinary local HTTP development, keep `DEBUG_JSON="true"` and `SESSION_COOKIE_SECURE_JSON="false"`.
 - Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by the user running the `./manage.py` process-command, described below.
 - Keep `SPOOL_ROOT_PATH` on durable, non-ephemeral local storage that supports atomic rename and `flock`. The application creates the queue's lifecycle subdirectories automatically.
 - Set `SOLR_URL`, `SOLR_XSL_PATH`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the appropriate local values. Both XSL paths should point into the freshly copied `WEBSERVED_DATA_DIR_PATH/resources` tree so researchers can deploy new mappings and local imports/includes through `usep-data`.
@@ -178,7 +178,7 @@ curl --user 'replace_me:replace_me' http://127.0.0.1:8000/reindex_all/
 uv run ./manage.py process_spool
 ```
 
-Replace the example credentials with `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` from `.env`. A successful full reindex pulls `usep_data`, populates the temporary and web-served directories, rewrites local XInclude references, and updates Solr. If `process_spool` reports a missing path, correct the corresponding `.env` value before retrying; queued events are retained and retried up to `SPOOL_MAX_ATTEMPTS`.
+Replace the example credentials with the `username` and `password` from `REMOTE_ADMIN_AUTH_JSON` in `.env`. A successful full reindex pulls `usep_data`, populates the temporary and web-served directories, rewrites local XInclude references, and updates Solr. If `process_spool` reports a missing path, correct the corresponding `.env` value before retrying; queued events are retained and retried up to `SPOOL_MAX_ATTEMPTS`.
 
 The production processor is intended to run every other minute. The command takes a non-blocking lock, so an overlapping invocation exits safely:
 
@@ -272,11 +272,11 @@ uv run ./manage.py validate_all_xml
 
 | Path | Methods | Protection | Purpose |
 | --- | --- | --- | --- |
-| `/` | GET, POST | Basic Auth | GitHub push listener |
-| `/force/` | GET, POST | Basic Auth | Legacy manual listener trigger |
-| `/reindex_all/` | GET | Basic Auth | Enqueue full pull, copy, and reindex |
-| `/list_orphans/` | GET | Basic Auth | Pull, validate, and republish current data under exclusive access, then compare public-file and Solr IDs; add `?format=json` for JSON |
-| `/orphan_handler/` | GET | Basic Auth | Confirm or cancel orphan deletion |
+| `/` | GET, POST | Listener Basic Auth | GitHub push listener |
+| `/force/` | GET, POST | Listener Basic Auth | Legacy manual listener trigger |
+| `/reindex_all/` | GET | Remote-admin Basic Auth | Enqueue full pull, copy, and reindex |
+| `/list_orphans/` | GET | Remote-admin Basic Auth | Pull, validate, and republish current data under exclusive access, then compare public-file and Solr IDs; add `?format=json` for JSON |
+| `/orphan_handler/` | GET | Remote-admin Basic Auth | Confirm or cancel orphan deletion |
 | `/processing_check/` | GET | Source-IP allowlist | Report processor freshness and queue backlog |
 | `/info/` | GET | Public | Service metadata |
 | `/version/` | GET | Public | Git branch and commit metadata |
