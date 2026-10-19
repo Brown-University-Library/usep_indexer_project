@@ -101,7 +101,7 @@ class DataIssueEmailTests(SimpleTestCase):
         self.assertIn('xml:id attribute on publicationStmt/idno', message.body)
         self.assertIn('Inscriptions successfully accepted by Solr: 1', message.body)
         self.assertIn('Inscriptions with recorded failures: 46', message.body)
-        self.assertIn('Data revision: abc1234', message.body)
+        self.assertIn('- usep-data revision: abc1234', message.body)
         for number in range(45):
             self.assertIn(f'/blob/abc1234/xml_inscriptions/transcribed/broken-{number:03}.xml', message.body)
         self.assertNotIn(str(self.root), message.body)
@@ -127,7 +127,10 @@ class DataIssueEmailTests(SimpleTestCase):
         self.run_processor()
         self.assertEqual(1, len(self.team_messages()))
         self.assertEqual(1, len(vars(mail)['outbox']))
-        self.assertIn('reached its attempt limit', self.team_messages()[0].body)
+        self.assertIn(
+            'This report may follow a recent change to the usep-data repository or a request to reindex inscriptions.',
+            self.team_messages()[0].body,
+        )
         failed = json.loads(next((self.spool_root / 'failed').glob('*.json')).read_text())
         self.assertEqual(2, failed['attempts'])
         self.run_processor(fails=False)
@@ -410,7 +413,7 @@ class DataIssueEmailTests(SimpleTestCase):
             data_issue_email.start_indexing('/private/revision', 1)
             data_issue_email.record_failure('missing.xml', 'xml_parse')
         body = data_issue_email.build_message(report)
-        self.assertIn('Data revision: unavailable', body)
+        self.assertIn('- usep-data revision: unavailable', body)
         self.assertIn('An exact source link is unavailable', body)
         self.assertNotIn('/private/revision', body)
 

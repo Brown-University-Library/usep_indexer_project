@@ -198,16 +198,17 @@ def build_message(report: RunReport) -> str:
     lines = [
         'USEP inscription processing found problems for review.',
         '',
-        f'Run started (UTC): {report.started_at}',
-        f'Data revision: {report.data_revision}',
-        f'Inscriptions selected: {report.selected_count}',
-        f'Inscriptions successfully accepted by Solr: {report.accepted_count}',
-        f'Inscriptions with recorded failures: {report.failed_count}',
-        f'Inscriptions listed for data review: {len(report.issues)}',
+        'This report may follow a recent change to the usep-data repository or a request to reindex inscriptions.',
         '',
-        'At least one queued event reached its attempt limit. This report covers the combined processing run.',
-        'New commits or separately queued runs may report the same unresolved problems again.',
+        f'- Run started (UTC): {report.started_at}',
+        f'- usep-data revision: {report.data_revision}',
+        f'- Inscriptions selected: {report.selected_count}',
+        f'- Inscriptions successfully accepted by Solr: {report.accepted_count}',
+        f'- Inscriptions with recorded failures: {report.failed_count}',
+        f'- Inscriptions listed for data review: {len(report.issues)}',
     ]
+    if not report.indexing_finished or report.failed_count > len(report.issues):
+        lines.append('')
     if not report.indexing_finished:
         lines.append('Processing stopped early. These counts and findings cover only the work completed so far.')
     if report.failed_count > len(report.issues):
