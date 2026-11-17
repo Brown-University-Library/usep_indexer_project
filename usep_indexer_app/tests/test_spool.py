@@ -3,6 +3,7 @@ import datetime
 import io
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -43,6 +44,23 @@ class SpoolTests(SimpleTestCase):
         joined_logs = '\n'.join(captured_logs.output)
         self.assertIn('event saved; event_type, ``incremental``', joined_logs)
         self.assertIn('request_id, ``delivery-1``', joined_logs)
+
+    def test_new_event_is_group_writable_despite_restrictive_umask(self) -> None:
+        """
+        Checks new queue files grant group write access even when the writer's umask removes it.
+        """
+        for creation_mask in (0o022, 0o077):
+            with self.subTest(umask=oct(creation_mask)), tempfile.TemporaryDirectory() as temporary_directory:
+                spool_root: Path = Path(temporary_directory)
+                spool.ensure_spool_directories(spool_root)
+                previous_umask: int = os.umask(creation_mask)
+                try:
+                    event_path: Path = spool.write_event(spool_root, 'incremental')
+                finally:
+                    os.umask(previous_umask)
+
+                self.assertEqual(0o664, stat.S_IMODE(event_path.stat().st_mode))
+                self.assertEqual('incremental', spool.load_event(event_path).event_type)
 
     @override_settings(TIME_ZONE='America/New_York')
     @patch(
