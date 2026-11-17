@@ -1,6 +1,10 @@
 import dataclasses
+import datetime
 import json
 import logging
+import socket
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.core.mail import mail_admins
@@ -9,18 +13,84 @@ from django.core.management.base import BaseCommand, CommandError
 from usep_indexer_app.lib import console_logging, data_issue_email, spool
 
 log = logging.getLogger(__name__)
-JOB_FAILURE_EMAIL_SUBJECT = 'USEP spool-processing job failed'
+JOB_FAILURE_EMAIL_SUBJECT = 'USEP indexer: queue-processing failure'
 
 
-def email_job_failure(output: str) -> None:
+def build_job_failure_message(output: str, error: str, hostname: str) -> str:
+    """
+    Builds administrator troubleshooting guidance using the current deployment's paths.
+
+    Called by: email_job_failure()
+    """
+    timestamp: str = datetime.datetime.now(ZoneInfo(settings.TIME_ZONE)).strftime('%d/%b/%Y %H:%M:%S %Z (%z)')
+    project_path: Path = Path(settings.BASE_DIR).resolve()
+    spool_path: Path = Path(settings.SPOOL_ROOT_PATH).resolve()
+    cron_log_path: Path = project_path.parent / 'logs' / 'process_spool_cron.log'
+    log_filename: str | Path | None = settings.LOGGING.get('handlers', {}).get('logfile', {}).get('filename')
+    application_log: str = 'No application logfile is configured; check the cron output below.'
+    if log_filename:
+        application_log = str(Path(log_filename).resolve())
+
+    message: str = f'''The USEP indexer could not finish a queue-processing run.
+
+Server: {hostname}
+Time: {timestamp}
+Command: manage.py process_spool
+Project directory: {project_path}
+Error: {error}
+
+WHERE TO START
+
+1. Check the application log around the time above:
+   {application_log}
+
+   Look for the ERROR entry and its complete traceback. Read the
+   preceding messages too: indexing may have succeeded before
+   a later queue-file operation failed.
+
+2. If the application log does not contain the relevant traceback,
+   check the cron output (confirm the redirection in the crontab):
+   {cron_log_path}
+
+3. Inspect the queue directories:
+   {spool_path / 'processing'}
+   {spool_path / 'pending'}
+   {spool_path / 'failed'}
+
+   For a PermissionError, check the affected file's ownership and
+   permissions, its parent directory permissions, and the account
+   running the cron command. File and directory permissions serve
+   different purposes.
+
+RETRIES AND COUNTS
+
+Events left in processing/ are picked up again by subsequent cron
+runs. An unresolved failure there can produce repeated emails.
+Events in failed/ have stopped retrying and require attention.
+
+When present, the counts below describe queue events, not
+individual inscriptions.
+An unexpected exception can also cause these counts to fall back
+to zero, even if some indexing already succeeded.
+
+PROCESSOR RESULT
+
+{output}'''
+    return message
+
+
+def email_job_failure(output: str, error: str | None = None) -> None:
     """
     Emails technical failures to administrators without sending them ordinary data-review reports.
 
     Called by: Command.handle()
     """
-    message = f'The USEP spool-processing job failed.\n\nProcessor result:\n{output}'
     try:
-        mail_admins(JOB_FAILURE_EMAIL_SUBJECT, message, fail_silently=False)
+        hostname: str = socket.gethostname()
+        error_summary: str = error if error is not None else output
+        message: str = build_job_failure_message(output, error_summary, hostname)
+        subject: str = f'{JOB_FAILURE_EMAIL_SUBJECT} on {hostname}'
+        mail_admins(subject, message, fail_silently=False)
     except Exception:
         log.exception('Unable to email Django admins about the failed spool-processing job.')
 
@@ -62,7 +132,7 @@ class Command(BaseCommand):
                 data_issue_email.email_report(report)
             technical_failure = result.technical_failure or report.failed_count > len(report.issues)
             if technical_failure and (result.failed > 0 or result.retried == 0):
-                email_job_failure(output)
+                email_job_failure(output, error=result.error)
             raise CommandError(console_logging.format_message(output, level='ERROR'))
         self.stdout.write(console_logging.format_message(output))
         self.stdout.flush()
