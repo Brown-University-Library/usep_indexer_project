@@ -6,7 +6,7 @@ from django.conf import settings
 from django.core.mail import mail_admins
 from django.core.management.base import BaseCommand, CommandError
 
-from usep_indexer_app.lib import data_issue_email, spool
+from usep_indexer_app.lib import console_logging, data_issue_email, spool
 
 log = logging.getLogger(__name__)
 JOB_FAILURE_EMAIL_SUBJECT = 'USEP spool-processing job failed'
@@ -51,7 +51,10 @@ class Command(BaseCommand):
                 )
             except Exception as error:
                 ## errors before a queue result exists cannot use the recorded attempt limit.
-                email_job_failure(f'{type(error).__name__}: {error}')
+                error_message: str = f'{type(error).__name__}: {error}'
+                self.stderr.write(console_logging.format_message(error_message, level='ERROR'))
+                self.stderr.flush()
+                email_job_failure(error_message)
                 raise
         output = json.dumps(dataclasses.asdict(result), sort_keys=True)
         if result.status == 'failed':
@@ -60,5 +63,6 @@ class Command(BaseCommand):
             technical_failure = result.technical_failure or report.failed_count > len(report.issues)
             if technical_failure and (result.failed > 0 or result.retried == 0):
                 email_job_failure(output)
-            raise CommandError(output)
-        self.stdout.write(output)
+            raise CommandError(console_logging.format_message(output, level='ERROR'))
+        self.stdout.write(console_logging.format_message(output))
+        self.stdout.flush()

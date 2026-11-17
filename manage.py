@@ -6,6 +6,8 @@ import sys
 
 import django  # for the "in case you're curious about versions" code
 
+from usep_indexer_app.lib import console_logging
+
 
 def main() -> None:
     """
@@ -13,6 +15,12 @@ def main() -> None:
 
     Called by: dundermain
     """
+    ## in case you're curious about versions -- feel free to comment out
+    if os.environ.get('RUN_MAIN') != 'true':
+        major, minor, micro = sys.version_info[:3]
+        print(console_logging.format_message(f'using python version, ``{major}.{minor}.{micro}``'), flush=True)
+        print(console_logging.format_message(f'using django version, ``{django.get_version()}``'), flush=True)
+
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
     try:
         from django.core.management import execute_from_command_line
@@ -26,10 +34,4 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    ## in case you're curious about versions -- feel free to comment out
-    if os.environ.get('RUN_MAIN') != 'true':
-        major, minor, micro = sys.version_info[:3]
-        print(f'using python version, ``{major}.{minor}.{micro}``')
-        print(f'using django version, ``{django.get_version()}``')
-
     main()

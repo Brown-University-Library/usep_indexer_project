@@ -314,14 +314,17 @@ class SpoolTests(SimpleTestCase):
 
     def test_management_command_processes_configured_spool(self) -> None:
         """
-        Checks that a successful cron-facing command emits output without email.
+        Checks that a successful cron-facing command emits a timestamped result without email.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             output = io.StringIO()
             with override_settings(SPOOL_ROOT_PATH=Path(temporary_directory)):
                 call_command('process_spool', stdout=output)
 
-        result = json.loads(output.getvalue())
+        timestamp, message = output.getvalue().split('] ', maxsplit=1)
+        datetime.datetime.strptime(timestamp.removeprefix('['), '%d/%b/%Y %H:%M:%S')
+        self.assertTrue(message.startswith('INFO '))
+        result = json.loads(message.removeprefix('INFO '))
         self.assertEqual('success', result['status'])
         self.assertEqual(0, result['claimed'])
         self.assertEqual([], vars(mail)['outbox'])
@@ -336,9 +339,13 @@ class SpoolTests(SimpleTestCase):
             with (
                 self.subTest(failed=failed, retried=retried),
                 patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', return_value=result),
-                self.assertRaisesRegex(CommandError, 'XML error'),
+                self.assertRaisesRegex(CommandError, 'XML error') as raised,
             ):
                 call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+            timestamp, message = str(raised.exception).split('] ', maxsplit=1)
+            datetime.datetime.strptime(timestamp.removeprefix('['), '%d/%b/%Y %H:%M:%S')
+            self.assertTrue(message.startswith('ERROR '))
+            self.assertEqual('failed', json.loads(message.removeprefix('ERROR '))['status'])
         self.assertEqual([], vars(mail)['outbox'])
 
     @override_settings(ADMINS=[('Test Admin', 'admin@example.org')])
@@ -346,11 +353,15 @@ class SpoolTests(SimpleTestCase):
         """
         Checks setup errors that cannot use queue retries alert administrators without a data-team report.
         """
+        error_output = io.StringIO()
         with (
             patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', side_effect=OSError('disk full')),
             self.assertRaisesRegex(OSError, 'disk full'),
         ):
-            call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+            call_command('process_spool', stdout=io.StringIO(), stderr=error_output)
+        timestamp, message = error_output.getvalue().split('] ', maxsplit=1)
+        datetime.datetime.strptime(timestamp.removeprefix('['), '%d/%b/%Y %H:%M:%S')
+        self.assertEqual('ERROR OSError: disk full\n', message)
         outbox: list[mail.EmailMessage] = vars(mail)['outbox']
         self.assertEqual(1, len(outbox))
         self.assertEqual(['admin@example.org'], outbox[0].to)

@@ -222,6 +222,8 @@ The Solr-version modes are read-only and do not run the query, update, or schema
 
 Typically run via cron, this processes one locked batch of queued webhook events, updates copied data and Solr, and records each event's outcome.
 
+Console summaries and errors include a local timestamp and severity, using the application log's date format (`[17/Nov/2026 07:48:02] INFO ...`). Each summary still contains the JSON counts after the prefix; failures retain a nonzero exit status. The Python/Django version messages also have timestamps and are flushed immediately so redirected cron output keeps those messages ahead of subprocess output. Git and rsync retain their native output format. This console formatting is separate from Django's application logging configuration.
+
 Usage:
 
 ```bash
