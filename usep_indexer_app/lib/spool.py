@@ -206,6 +206,8 @@ def write_json_atomic(document: dict[str, object], destination_path: Path) -> No
     temporary_path = destination_path.parent / f'.{destination_path.name}.{uuid.uuid4().hex}.tmp'
     try:
         with temporary_path.open('x', encoding='utf-8') as temporary_file:
+            ## lets the processor's shared group update completion timestamps despite the writer's umask.
+            os.fchmod(temporary_file.fileno(), 0o664)
             json.dump(document, temporary_file, indent=2, sort_keys=True)
             temporary_file.write('\n')
             temporary_file.flush()

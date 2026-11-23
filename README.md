@@ -52,7 +52,7 @@ A nice visualization of the listening-processing-indexing workflows is at: [REPO
 
 An optional data-team email groups recognized inscription errors and lists every affected inscription with a link to its source XML at the processed revision when available. It includes the counts of accepted documents and recorded failures without copying raw exceptions or server details. Earlier failed attempts send no email. When at least one event reaches its attempt limit, the command sends the report for the combined processing run. Ordinary data findings do not send a separate administrator email; administrators who want these reports can join the optional CC list. Technical failures instead alert Django's `ADMINS` after the attempt limit, and a run with both kinds of failure sends both reports. Failures that prevent the queue from recording attempts alert administrators immediately. Successful runs send no processor email.
 
-Recipient and subject-label settings are described in `config/example.env`; the team email is disabled by default. Reports are held only in memory, with no notification history. New commits, separately queued runs, or work combined with events at different attempt counts can report unresolved problems again. An email-delivery failure is logged without changing the indexing result or adding a separate delivery queue.
+All three data-team email environment variables are required: `USEP_DATA_TEAM_EMAILS_JSON`, `USEP_DATA_TEAM_CC_EMAILS_JSON`, and `USEP_DATA_TEAM_EMAIL_LABEL`. An explicit `[]` primary recipient list disables the report; an explicit `[]` CC list requests no copies. Missing variables stop Django during settings loading instead of silently disabling reports. Such startup failures appear in the startup or cron logs, before the command's administrator-email handling can run. See `config/example.env` for configuration examples. Reports are held only in memory, with no notification history. New commits, separately queued runs, or work combined with events at different attempt counts can report unresolved problems again. An email-delivery failure is logged without changing the indexing result or adding a separate delivery queue.
 
 
 ## Requirements
@@ -137,9 +137,11 @@ Update the outer `.env` using `config/example.env` as the checklist. In particul
 - Replace the Django secret, Basic Auth credentials, hosts, trusted origins, and IP allowlist. `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` configure the listener. The required `REMOTE_ADMIN_AUTH_JSON` object supplies separate nonempty `username` and `password` strings for reindexing and orphan review/deletion. For ordinary local HTTP development, keep `DEBUG_JSON="true"` and `SESSION_COOKIE_SECURE_JSON="false"`.
 - Set `USEP_DATA_GIT_CLONED_DIR_PATH`, `TEMP_UNIFIED_INSCRIPTIONS_DIR_PATH`, `WEBSERVED_DATA_DIR_PATH`, `SPOOL_ROOT_PATH`, and `LOG_PATH` to real locations. Absolute paths are recommended. The log's parent directory must already exist and all data paths must be writable by the user running the `./manage.py` process-command, described below.
 - Keep `SPOOL_ROOT_PATH` on durable, non-ephemeral local storage that supports atomic rename and `flock`. The application creates the queue's lifecycle subdirectories automatically.
+- When the web listener and processor run as different users, configure newly created queue files to belong to a group shared by both accounts, using the application's process group or setgid on the creation directory. Spool JSON files are explicitly written with mode `0664` before atomic publication, so the shared group can update completion timestamps regardless of the writer's umask. Existing files are not automatically changed.
 - Set `SOLR_URL`, `SOLR_XSL_PATH`, and `TRANSCRIPTION_PARSER_XSL_PATH` to the appropriate local values. Both XSL paths should point into the freshly copied `WEBSERVED_DATA_DIR_PATH/resources` tree so researchers can deploy new mappings and local imports/includes through `usep-data`.
 - Review `SOLR_INDEX_BATCH_SIZE`, `SOLR_COMMIT_WITHIN_MS`, and `SOLR_TIMEOUT_SECONDS`. The defaults are 100 documents/IDs, 500 milliseconds, and 30 seconds. Confirm the deployed Solr update-handler/autocommit behavior before changing or removing the `commitWithin` policy.
 - Review the file-based cache, static-file, email, queue-retention, and queue-health settings. The email server sends admin notifications for web-request exceptions and technical processor failures as described above; its settings are required when Django loads.
+- Set all three `USEP_DATA_TEAM_*` email variables before deploying code that requires them, even if you explicitly disable the report with an empty primary recipient list. Use an environment-specific subject label such as `Production`.
 
 The old shell variables map to the similarly named variables in the example file, without the `usep_gh__` prefix.
 
@@ -221,6 +223,10 @@ The Solr-version modes are read-only and do not run the query, update, or schema
 ### `process_spool`
 
 Typically run via cron, this processes one locked batch of queued webhook events, updates copied data and Solr, and records each event's outcome.
+
+Console summaries and errors include a local timestamp and severity, using the application log's date format (`[17/Nov/2026 07:48:02] INFO ...`). Each summary still contains the JSON counts after the prefix; failures retain a nonzero exit status. The Python/Django version messages also have timestamps and are flushed immediately so redirected cron output keeps those messages ahead of subprocess output. Git and rsync retain their native output format. This console formatting is separate from Django's application logging configuration.
+
+Administrator failure emails identify the host, time with timezone, project directory, application log, and queue directories. The troubleshooting guidance explains where to find tracebacks, how unfinished events are retried, and why zero queue counts can accompany an indexing operation that already succeeded. The application log path comes from the configured `logfile` handler. The email also points to `../logs/process_spool_cron.log`, resolved relative to the project directory, and advises checking the crontab's output redirection.
 
 Usage:
 

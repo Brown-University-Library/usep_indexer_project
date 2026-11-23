@@ -1,7 +1,9 @@
+import dataclasses
 import datetime
 import io
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -42,6 +44,23 @@ class SpoolTests(SimpleTestCase):
         joined_logs = '\n'.join(captured_logs.output)
         self.assertIn('event saved; event_type, ``incremental``', joined_logs)
         self.assertIn('request_id, ``delivery-1``', joined_logs)
+
+    def test_new_event_is_group_writable_despite_restrictive_umask(self) -> None:
+        """
+        Checks new queue files grant group write access even when the writer's umask removes it.
+        """
+        for creation_mask in (0o022, 0o077):
+            with self.subTest(umask=oct(creation_mask)), tempfile.TemporaryDirectory() as temporary_directory:
+                spool_root: Path = Path(temporary_directory)
+                spool.ensure_spool_directories(spool_root)
+                previous_umask: int = os.umask(creation_mask)
+                try:
+                    event_path: Path = spool.write_event(spool_root, 'incremental')
+                finally:
+                    os.umask(previous_umask)
+
+                self.assertEqual(0o664, stat.S_IMODE(event_path.stat().st_mode))
+                self.assertEqual('incremental', spool.load_event(event_path).event_type)
 
     @override_settings(TIME_ZONE='America/New_York')
     @patch(
@@ -314,14 +333,17 @@ class SpoolTests(SimpleTestCase):
 
     def test_management_command_processes_configured_spool(self) -> None:
         """
-        Checks that a successful cron-facing command emits output without email.
+        Checks that a successful cron-facing command emits a timestamped result without email.
         """
         with tempfile.TemporaryDirectory() as temporary_directory:
             output = io.StringIO()
             with override_settings(SPOOL_ROOT_PATH=Path(temporary_directory)):
                 call_command('process_spool', stdout=output)
 
-        result = json.loads(output.getvalue())
+        timestamp, message = output.getvalue().split('] ', maxsplit=1)
+        datetime.datetime.strptime(timestamp.removeprefix('['), '%d/%b/%Y %H:%M:%S')
+        self.assertTrue(message.startswith('INFO '))
+        result = json.loads(message.removeprefix('INFO '))
         self.assertEqual('success', result['status'])
         self.assertEqual(0, result['claimed'])
         self.assertEqual([], vars(mail)['outbox'])
@@ -336,25 +358,76 @@ class SpoolTests(SimpleTestCase):
             with (
                 self.subTest(failed=failed, retried=retried),
                 patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', return_value=result),
-                self.assertRaisesRegex(CommandError, 'XML error'),
+                self.assertRaisesRegex(CommandError, 'XML error') as raised,
             ):
                 call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+            timestamp, message = str(raised.exception).split('] ', maxsplit=1)
+            datetime.datetime.strptime(timestamp.removeprefix('['), '%d/%b/%Y %H:%M:%S')
+            self.assertTrue(message.startswith('ERROR '))
+            self.assertEqual('failed', json.loads(message.removeprefix('ERROR '))['status'])
         self.assertEqual([], vars(mail)['outbox'])
 
-    @override_settings(ADMINS=[('Test Admin', 'admin@example.org')])
+    @override_settings(
+        ADMINS=[('Test Admin', 'admin@example.org')],
+        BASE_DIR=Path('/srv/example/indexer'),
+        SPOOL_ROOT_PATH=Path('/srv/example/spool'),
+        LOGGING={'handlers': {'logfile': {'filename': '../example-logs/application.log'}}},
+        TIME_ZONE='UTC',
+    )
+    def test_technical_failure_email_provides_deployment_specific_troubleshooting(self) -> None:
+        """
+        Checks technical alerts identify the host, configured paths, time, and original processor result.
+        """
+        result: spool.ProcessResult = spool.ProcessResult(
+            status='failed', error='PermissionError: permission denied', technical_failure=True
+        )
+        with (
+            patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', return_value=result),
+            patch('usep_indexer_app.management.commands.process_spool.socket.gethostname', return_value='indexer.example.org'),
+            self.assertRaisesRegex(CommandError, 'PermissionError'),
+        ):
+            call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+
+        outbox: list[mail.EmailMessage] = vars(mail)['outbox']
+        self.assertEqual(1, len(outbox))
+        message: mail.EmailMessage = outbox[0]
+        self.assertIn('USEP indexer: queue-processing failure on indexer.example.org', message.subject)
+        self.assertIn('Server: indexer.example.org', message.body)
+        self.assertRegex(message.body, r'Time: \d{2}/\w{3}/\d{4} \d{2}:\d{2}:\d{2} UTC \(\+0000\)')
+        self.assertIn('Command: manage.py process_spool', message.body)
+        self.assertIn('Project directory: /srv/example/indexer', message.body)
+        self.assertIn('Error: PermissionError: permission denied', message.body)
+        self.assertIn(str(Path('../example-logs/application.log').resolve()), message.body)
+        self.assertIn('/srv/example/logs/process_spool_cron.log', message.body)
+        for directory_name in ('processing', 'pending', 'failed'):
+            self.assertIn(f'/srv/example/spool/{directory_name}', message.body)
+        self.assertIn('complete traceback', message.body)
+        self.assertIn('repeated emails', message.body)
+        self.assertIn('counts to fall back\nto zero', message.body)
+        self.assertEqual(dataclasses.asdict(result), json.loads(message.body.split('PROCESSOR RESULT\n\n', maxsplit=1)[1]))
+
+    @override_settings(ADMINS=[('Test Admin', 'admin@example.org')], BASE_DIR=Path('/srv/example/indexer'), LOGGING={})
     def test_unexpected_processor_exception_alerts_admins_when_attempts_cannot_be_recorded(self) -> None:
         """
         Checks setup errors that cannot use queue retries alert administrators without a data-team report.
         """
+        error_output = io.StringIO()
         with (
             patch('usep_indexer_app.management.commands.process_spool.spool.process_spool', side_effect=OSError('disk full')),
             self.assertRaisesRegex(OSError, 'disk full'),
         ):
-            call_command('process_spool', stdout=io.StringIO(), stderr=io.StringIO())
+            call_command('process_spool', stdout=io.StringIO(), stderr=error_output)
+        timestamp, message = error_output.getvalue().split('] ', maxsplit=1)
+        datetime.datetime.strptime(timestamp.removeprefix('['), '%d/%b/%Y %H:%M:%S')
+        self.assertEqual('ERROR OSError: disk full\n', message)
         outbox: list[mail.EmailMessage] = vars(mail)['outbox']
         self.assertEqual(1, len(outbox))
         self.assertEqual(['admin@example.org'], outbox[0].to)
         self.assertIn('disk full', outbox[0].body)
+        self.assertIn('Error: OSError: disk full', outbox[0].body)
+        self.assertIn('No application logfile is configured; check the cron output below.', outbox[0].body)
+        self.assertIn('/srv/example/logs/process_spool_cron.log', outbox[0].body)
+        self.assertTrue(outbox[0].body.endswith('PROCESSOR RESULT\n\nOSError: disk full'))
 
     @override_settings(ADMINS=[('Test Admin', 'admin@example.org')], SPOOL_MAX_ATTEMPTS=2)
     def test_source_preparation_failure_retries_before_alerting_admins(self) -> None:

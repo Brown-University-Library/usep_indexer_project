@@ -81,7 +81,7 @@ _active_report: ContextVar[RunReport | None] = ContextVar('usep_data_issue_repor
 
 def parse_recipients(raw_value: str, *, setting_name: str = 'USEP_DATA_TEAM_EMAILS_JSON') -> list[str]:
     """
-    Validates the optional JSON list of team addresses without exposing its values in errors.
+    Validates an explicitly configured JSON list of team addresses without exposing its values in errors.
 
     Called by: config.settings
     """
@@ -253,16 +253,16 @@ def email_report(report: RunReport) -> None:
 
     Called by: management.commands.process_spool.Command.handle()
     """
-    recipients = getattr(settings, 'USEP_DATA_TEAM_EMAILS', [])
+    recipients: list[str] = settings.USEP_DATA_TEAM_EMAILS
     if recipients and report.issues:
         try:
-            label = ' '.join(str(getattr(settings, 'USEP_DATA_TEAM_EMAIL_LABEL', 'USEP indexer')).split())
+            label: str = ' '.join(settings.USEP_DATA_TEAM_EMAIL_LABEL.split())
             message = EmailMessage(
                 subject=f'[{label}] USEP data review: {len(report.issues)} inscription(s)',
                 body=build_message(report),
                 from_email=settings.SERVER_EMAIL,
                 to=recipients,
-                cc=getattr(settings, 'USEP_DATA_TEAM_CC_EMAILS', []),
+                cc=settings.USEP_DATA_TEAM_CC_EMAILS,
             )
             message.send(fail_silently=False)
         except Exception:

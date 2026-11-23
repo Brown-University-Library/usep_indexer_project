@@ -23,7 +23,7 @@ class ValidateXMLCommandTests(SimpleTestCase):
             xml_path.write_bytes(b'<?xml version="1.0"?><root><child /></root>')
             output = io.StringIO()
 
-            call_command('validate_xml', str(xml_path), stdout=output)
+            call_command('validate_xml', str(xml_path), stdout=output, no_color=True)
 
         self.assertEqual(f'XML is well-formed: {xml_path}\n', output.getvalue())
 
@@ -51,7 +51,7 @@ class ValidateXMLCommandTests(SimpleTestCase):
         )
         output = io.StringIO()
 
-        call_command('validate_xml', source, stdout=output)
+        call_command('validate_xml', source, stdout=output, no_color=True)
 
         self.assertEqual(f'XML is well-formed: {source}\n', output.getvalue())
         mock_get.assert_called_once_with(source, follow_redirects=True, timeout=30.0)
